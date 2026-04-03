@@ -78,7 +78,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 def build_summary(result: SolveResult, output_paths: dict[str, Path]) -> dict[str, object]:
     unassigned_reason_counts = Counter(item.reason for item in result.assignment.unassigned_orders)
     leg_counts = Counter(route["leg"] for route in result.routes_table)
-    time_warning_count = sum(1 for route in result.routes_table if route["time_status"] == "TIME_WARNING")
+    time_warning_count = sum(1 for route in result.routes_table if route.get("time_warning"))
 
     return {
         "routes_count": len(result.routes_table),

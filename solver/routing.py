@@ -306,7 +306,7 @@ def classify_route_timing(
     days, time_status, time_warning = classify_drive_time(drive_hours)
     days = max(days, math.ceil(total_elapsed_h / WORK_TIME_LIMIT_H) if total_elapsed_h > 0 else 1)
     if total_elapsed_h > WORK_TIME_LIMIT_H:
-        return days, "TIME_WARNING", "WORK_TIME_EXCEEDED"
+        return days, "multiday", "Trip exceeds a single 12h workday and requires dispatcher review"
     return days, time_status, time_warning
 
 

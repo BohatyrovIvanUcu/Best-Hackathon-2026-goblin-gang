@@ -174,7 +174,7 @@ Warning rule:
 - if `total_elapsed_h > 12`, route status becomes:
 
 ```text
-TIME_WARNING / WORK_TIME_EXCEEDED
+multiday / "Trip exceeds a single 12h workday and requires dispatcher review"
 ```
 
 ## 5. Reserved Stock Semantics
@@ -210,7 +210,7 @@ The implementation was validated by:
 - synthetic `Leg 1` shortage scenario
 - synthetic en-route reinsertion scenario
 - synthetic long-route timing scenario that triggers
-  `TIME_WARNING / WORK_TIME_EXCEEDED`
+  a non-`ok` route timing status
 
 ## 8. Run Instructions
 
