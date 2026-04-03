@@ -1,0 +1,9 @@
+id,name,type,capacity_kg,fuel_per_100km,depot_node_id,driver_hourly,avg_speed_kmh,amortization_per_km,maintenance_per_km
+T1,Фура Київ-1,semi,20000,35.0,FACTORY_1,,,,
+T2,Фура Харків-1,semi,20000,35.0,FACTORY_2,,,,
+T3,Вантажівка К-1,truck,5000,22.0,WAREHOUSE_1,,,,
+T4,Вантажівка Х-1,truck,5000,22.0,WAREHOUSE_2,,,,
+T5,Вантажівка Д-1,truck,5000,22.0,WAREHOUSE_4,,,,
+T6,Вантажівка О-1,truck,3000,18.0,WAREHOUSE_5,,,,
+T7,Бус Київ-1,van,1500,12.0,WAREHOUSE_1,200.0,,,
+T8,Бус Харків-1,van,1500,12.0,WAREHOUSE_2,200.0,,,

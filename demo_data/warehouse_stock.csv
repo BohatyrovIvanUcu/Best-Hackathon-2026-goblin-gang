@@ -1,0 +1,16 @@
+warehouse_id,product_id,quantity_kg,reserved_kg
+WAREHOUSE_1,product_A,3000.0,0.0
+WAREHOUSE_1,product_B,1500.0,0.0
+WAREHOUSE_1,product_C,2000.0,0.0
+WAREHOUSE_2,product_A,2500.0,0.0
+WAREHOUSE_2,product_B,800.0,0.0
+WAREHOUSE_2,product_C,1800.0,0.0
+WAREHOUSE_3,product_A,200.0,0.0
+WAREHOUSE_3,product_B,600.0,0.0
+WAREHOUSE_3,product_C,900.0,0.0
+WAREHOUSE_4,product_A,2000.0,0.0
+WAREHOUSE_4,product_B,1200.0,0.0
+WAREHOUSE_4,product_C,1500.0,0.0
+WAREHOUSE_5,product_A,1800.0,0.0
+WAREHOUSE_5,product_B,700.0,0.0
+WAREHOUSE_5,product_C,1100.0,0.0

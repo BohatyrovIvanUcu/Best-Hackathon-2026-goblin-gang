@@ -1,0 +1,10 @@
+key,value
+fuel_price,52.0
+driver_hourly_default,180.0
+avg_speed_default,55.0
+amortization_default,5.0
+maintenance_default,3.0
+max_detour_ratio,0.15
+min_priority_enroute,ELEVATED
+unload_min_default,15
+departure_time_default,08:00
