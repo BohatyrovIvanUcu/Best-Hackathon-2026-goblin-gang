@@ -169,6 +169,7 @@ def import_demo_data(database_path: Path, data_dir: Path) -> dict[str, int]:
                 INSERT INTO routes(
                     id,
                     truck_id,
+                    supersedes_route_id,
                     leg,
                     stops,
                     total_km,
@@ -187,6 +188,7 @@ def import_demo_data(database_path: Path, data_dir: Path) -> dict[str, int]:
                 VALUES(
                     :id,
                     :truck_id,
+                    :supersedes_route_id,
                     :leg,
                     :stops,
                     :total_km,
@@ -236,6 +238,9 @@ def import_demo_data(database_path: Path, data_dir: Path) -> dict[str, int]:
 
 def clear_import_target_tables(connection: sqlite3.Connection) -> None:
     for table_name in (
+        "route_cargo_state",
+        "route_execution",
+        "truck_state",
         "route_cargo",
         "routes",
         "demand",

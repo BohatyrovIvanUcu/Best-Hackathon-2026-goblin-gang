@@ -26,6 +26,53 @@ CREATE TABLE IF NOT EXISTS warehouse_stock (
 );
 """
 
+TRUCK_STATE_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS truck_state (
+    truck_id TEXT PRIMARY KEY,
+    status TEXT NOT NULL
+        CHECK (status IN ('idle', 'loading', 'loaded', 'en_route', 'unloading', 'completed', 'blocked')),
+    active_route_id INTEGER DEFAULT NULL,
+    current_node_id TEXT DEFAULT NULL,
+    current_lat REAL DEFAULT NULL,
+    current_lon REAL DEFAULT NULL,
+    last_completed_stop_index INTEGER NOT NULL DEFAULT 0 CHECK (last_completed_stop_index >= 0),
+    remaining_capacity_kg REAL NOT NULL CHECK (remaining_capacity_kg >= 0),
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (truck_id) REFERENCES trucks(id) ON DELETE CASCADE,
+    FOREIGN KEY (current_node_id) REFERENCES nodes(id) ON DELETE SET NULL,
+    FOREIGN KEY (active_route_id) REFERENCES routes(id) ON DELETE SET NULL
+);
+"""
+
+ROUTE_EXECUTION_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS route_execution (
+    route_id INTEGER PRIMARY KEY,
+    status TEXT NOT NULL
+        CHECK (status IN ('planned', 'loading', 'in_progress', 'completed', 'cancelled')),
+    last_completed_stop_index INTEGER NOT NULL DEFAULT 0 CHECK (last_completed_stop_index >= 0),
+    next_stop_index INTEGER DEFAULT 1 CHECK (next_stop_index IS NULL OR next_stop_index >= 0),
+    started_at TEXT DEFAULT NULL,
+    completed_at TEXT DEFAULT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (route_id) REFERENCES routes(id) ON DELETE CASCADE
+);
+"""
+
+ROUTE_CARGO_STATE_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS route_cargo_state (
+    route_id INTEGER NOT NULL,
+    stop_node_id TEXT NOT NULL,
+    product_id TEXT NOT NULL,
+    qty_reserved_kg REAL NOT NULL DEFAULT 0 CHECK (qty_reserved_kg >= 0),
+    qty_loaded_kg REAL NOT NULL DEFAULT 0 CHECK (qty_loaded_kg >= 0),
+    qty_delivered_kg REAL NOT NULL DEFAULT 0 CHECK (qty_delivered_kg >= 0),
+    PRIMARY KEY (route_id, stop_node_id, product_id),
+    FOREIGN KEY (route_id) REFERENCES routes(id) ON DELETE CASCADE,
+    FOREIGN KEY (stop_node_id) REFERENCES nodes(id) ON DELETE RESTRICT,
+    FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE RESTRICT
+);
+"""
+
 SCHEMA_STATEMENTS: tuple[str, ...] = (
     """
     CREATE TABLE IF NOT EXISTS nodes (
@@ -93,6 +140,7 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
     CREATE TABLE IF NOT EXISTS routes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         truck_id TEXT NOT NULL,
+        supersedes_route_id INTEGER DEFAULT NULL,
         leg INTEGER NOT NULL CHECK (leg IN (1, 2)),
         stops TEXT NOT NULL,
         total_km REAL NOT NULL CHECK (total_km >= 0),
@@ -107,7 +155,8 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         timeline TEXT NOT NULL,
         created_at TEXT NOT NULL,
         is_active INTEGER DEFAULT 1 CHECK (is_active IN (0, 1)),
-        FOREIGN KEY (truck_id) REFERENCES trucks(id) ON DELETE RESTRICT
+        FOREIGN KEY (truck_id) REFERENCES trucks(id) ON DELETE RESTRICT,
+        FOREIGN KEY (supersedes_route_id) REFERENCES routes(id) ON DELETE SET NULL
     );
     """,
     """
@@ -128,6 +177,9 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         value TEXT NOT NULL
     );
     """,
+    ROUTE_EXECUTION_TABLE_SQL,
+    ROUTE_CARGO_STATE_TABLE_SQL,
+    TRUCK_STATE_TABLE_SQL,
 )
 
 INDEX_STATEMENTS: tuple[str, ...] = (
@@ -138,5 +190,9 @@ INDEX_STATEMENTS: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS idx_demand_is_urgent ON demand(is_urgent);",
     "CREATE INDEX IF NOT EXISTS idx_routes_truck_id ON routes(truck_id);",
     "CREATE INDEX IF NOT EXISTS idx_routes_is_active ON routes(is_active);",
+    "CREATE INDEX IF NOT EXISTS idx_routes_supersedes_route_id ON routes(supersedes_route_id);",
     "CREATE INDEX IF NOT EXISTS idx_route_cargo_stop_node_id ON route_cargo(stop_node_id);",
+    "CREATE INDEX IF NOT EXISTS idx_route_execution_status ON route_execution(status);",
+    "CREATE INDEX IF NOT EXISTS idx_truck_state_status ON truck_state(status);",
+    "CREATE INDEX IF NOT EXISTS idx_truck_state_active_route_id ON truck_state(active_route_id);",
 )

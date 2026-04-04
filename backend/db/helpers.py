@@ -90,6 +90,7 @@ def normalize_route_row(row: dict[str, str]) -> dict[str, object]:
     return {
         "id": int(row["id"]),
         "truck_id": row["truck_id"],
+        "supersedes_route_id": int(row["supersedes_route_id"]) if row.get("supersedes_route_id") else None,
         "leg": int(row["leg"]),
         "stops": row["stops"],
         "total_km": float(row["total_km"]),

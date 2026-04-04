@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from backend.db.execution import _fetch_route_execution_details
 from backend.db.helpers import connect, parse_setting_value
 
 
@@ -177,15 +178,30 @@ def fetch_routes_data(
                 r.truck_id,
                 t.name AS truck_name,
                 t.type AS truck_type,
+                r.supersedes_route_id,
                 r.leg,
                 r.stops,
                 r.total_km,
                 r.total_cost,
                 r.drive_hours,
                 r.created_at,
-                r.is_active
+                r.is_active,
+                re.status AS route_status,
+                re.last_completed_stop_index,
+                re.next_stop_index,
+                re.started_at,
+                re.completed_at,
+                ts.status AS truck_status,
+                ts.active_route_id,
+                ts.current_node_id,
+                ts.current_lat,
+                ts.current_lon,
+                ts.remaining_capacity_kg,
+                ts.updated_at AS truck_updated_at
             FROM routes AS r
             JOIN trucks AS t ON t.id = r.truck_id
+            LEFT JOIN route_execution AS re ON re.route_id = r.id
+            LEFT JOIN truck_state AS ts ON ts.truck_id = r.truck_id
             WHERE r.is_active = 1
         """
         params: list[object] = []
@@ -201,12 +217,19 @@ def fetch_routes_data(
         routes = []
         for row in connection.execute(query, params):
             stops = json.loads(row["stops"])
+            next_stop_index = row["next_stop_index"]
+            current_stop_node_id = (
+                stops[int(next_stop_index)]
+                if next_stop_index is not None and int(next_stop_index) < len(stops)
+                else None
+            )
             routes.append(
                 {
                     "id": row["id"],
                     "truck_id": row["truck_id"],
                     "truck_name": row["truck_name"],
                     "truck_type": row["truck_type"],
+                    "supersedes_route_id": row["supersedes_route_id"],
                     "leg": row["leg"],
                     "stops": stops,
                     "stops_names": [node_names.get(node_id, node_id) for node_id in stops],
@@ -215,6 +238,31 @@ def fetch_routes_data(
                     "estimated_hours": row["drive_hours"],
                     "created_at": row["created_at"],
                     "is_active": bool(row["is_active"]),
+                    "execution": {
+                        "route_status": row["route_status"],
+                        "last_completed_stop_index": row["last_completed_stop_index"],
+                        "next_stop_index": next_stop_index,
+                        "started_at": row["started_at"],
+                        "completed_at": row["completed_at"],
+                        "locked_prefix": stops[: int(row["last_completed_stop_index"] or 0) + 1],
+                        "current_stop_node_id": current_stop_node_id,
+                        "current_stop_name": node_names.get(current_stop_node_id, current_stop_node_id)
+                        if current_stop_node_id is not None
+                        else None,
+                        "is_current_route_for_truck": row["active_route_id"] == row["id"],
+                        "truck_state": {
+                            "status": row["truck_status"],
+                            "active_route_id": row["active_route_id"],
+                            "current_node_id": row["current_node_id"],
+                            "current_node_name": node_names.get(row["current_node_id"], row["current_node_id"])
+                            if row["current_node_id"] is not None
+                            else None,
+                            "current_lat": row["current_lat"],
+                            "current_lon": row["current_lon"],
+                            "remaining_capacity_kg": row["remaining_capacity_kg"],
+                            "updated_at": row["truck_updated_at"],
+                        },
+                    },
                 }
             )
     finally:
@@ -240,11 +288,55 @@ def fetch_route_by_truck_id(
         if truck_row is None:
             raise LookupError(f"Вантажівку {truck_id} не знайдено або маршрут ще не побудовано")
 
-        route_row = connection.execute(
+        active_route_row = connection.execute(
+            """
+            SELECT active_route_id
+            FROM truck_state
+            WHERE truck_id = ?
+            """,
+            (truck_id,),
+        ).fetchone()
+        active_route_id = (
+            int(active_route_row["active_route_id"])
+            if active_route_row is not None and active_route_row["active_route_id"] is not None
+            else None
+        )
+
+        if active_route_id is not None:
+            route_row = connection.execute(
+                """
+                SELECT
+                    id,
+                    truck_id,
+                    supersedes_route_id,
+                    leg,
+                    stops,
+                    total_km,
+                    total_cost,
+                    drive_hours,
+                    total_elapsed_h,
+                    days,
+                    departure_time,
+                    arrival_time,
+                    time_status,
+                    time_warning,
+                    timeline,
+                    created_at
+                FROM routes
+                WHERE id = ? AND is_active = 1
+                """,
+                (active_route_id,),
+            ).fetchone()
+        else:
+            route_row = None
+
+        if route_row is None:
+            route_row = connection.execute(
             """
             SELECT
                 id,
                 truck_id,
+                supersedes_route_id,
                 leg,
                 stops,
                 total_km,
@@ -337,6 +429,7 @@ def fetch_route_by_truck_id(
         "depot_node_id": truck_row["depot_node_id"],
         "route": {
             "id": route_row["id"],
+            "supersedes_route_id": route_row["supersedes_route_id"],
             "leg": route_row["leg"],
             "stops": stops,
             "stops_details": stop_details,
@@ -350,8 +443,20 @@ def fetch_route_by_truck_id(
             "time_status": route_row["time_status"],
             "time_warning": route_row["time_warning"],
             "created_at": route_row["created_at"],
+            "execution": fetch_route_execution_data(database_path, int(route_row["id"])),
         },
     }
+
+
+def fetch_route_execution_data(
+    database_path: Path,
+    route_id: int,
+) -> dict[str, object]:
+    connection = connect(database_path)
+    try:
+        return _fetch_route_execution_details(connection, route_id)
+    finally:
+        connection.close()
 
 
 def _build_route_stop_details(

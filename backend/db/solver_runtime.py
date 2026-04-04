@@ -1,12 +1,27 @@
 from __future__ import annotations
 
+import json
 import time as time_module
 from pathlib import Path
 
 from solver.graph import build_graph_from_edges
-from solver.io import DemandRecord, Edge, Node, Product, SolverInputs, Truck, WarehouseStockRecord
+from solver.io import (
+    ActiveRouteSnapshot,
+    DemandRecord,
+    DynamicSolverInputs,
+    Edge,
+    Node,
+    Product,
+    RouteCargoExecutionState,
+    RouteExecutionState,
+    SolverInputs,
+    Truck,
+    TruckLiveState,
+    WarehouseStockRecord,
+)
 from solver.routing import SolveResult, solve_network
 
+from backend.db.execution import reset_execution_state_for_active_plan
 from backend.db.helpers import connect, parse_datetime_value, parse_setting_value
 
 
@@ -170,6 +185,138 @@ def load_solver_inputs_from_db(database_path: Path) -> SolverInputs:
     )
 
 
+def load_dynamic_solver_inputs_from_db(database_path: Path) -> DynamicSolverInputs:
+    static_inputs = load_solver_inputs_from_db(database_path)
+    connection = connect(database_path)
+    try:
+        active_route_rows = connection.execute(
+            """
+            SELECT id, truck_id, leg, stops, supersedes_route_id
+            FROM routes
+            WHERE is_active = 1
+            ORDER BY id
+            """
+        ).fetchall()
+        cargo_rows = connection.execute(
+            """
+            SELECT route_id, stop_node_id, product_id, qty_kg
+            FROM route_cargo
+            WHERE route_id IN (
+                SELECT id FROM routes WHERE is_active = 1
+            )
+            ORDER BY route_id, stop_node_id, product_id
+            """
+        ).fetchall()
+
+        cargo_by_route: dict[int, dict[tuple[str, str], float]] = {}
+        for row in cargo_rows:
+            route_id = int(row["route_id"])
+            cargo_by_route.setdefault(route_id, {})[(row["stop_node_id"], row["product_id"])] = float(row["qty_kg"])
+
+        active_routes = {
+            int(row["id"]): ActiveRouteSnapshot(
+                route_id=int(row["id"]),
+                truck_id=row["truck_id"],
+                leg=int(row["leg"]),
+                stops=tuple(json.loads(row["stops"])),
+                cargo_by_stop_product=cargo_by_route.get(int(row["id"]), {}),
+                supersedes_route_id=row["supersedes_route_id"],
+            )
+            for row in active_route_rows
+        }
+        truck_states = {
+            row["truck_id"]: TruckLiveState(
+                truck_id=row["truck_id"],
+                status=row["status"],
+                active_route_id=row["active_route_id"],
+                current_node_id=row["current_node_id"],
+                current_lat=row["current_lat"],
+                current_lon=row["current_lon"],
+                last_completed_stop_index=int(row["last_completed_stop_index"]),
+                remaining_capacity_kg=float(row["remaining_capacity_kg"]),
+                updated_at=parse_datetime_value(row["updated_at"]),
+            )
+            for row in connection.execute(
+                """
+                SELECT
+                    truck_id,
+                    status,
+                    active_route_id,
+                    current_node_id,
+                    current_lat,
+                    current_lon,
+                    last_completed_stop_index,
+                    remaining_capacity_kg,
+                    updated_at
+                FROM truck_state
+                ORDER BY truck_id
+                """
+            )
+        }
+        route_execution = {
+            int(row["route_id"]): RouteExecutionState(
+                route_id=int(row["route_id"]),
+                status=row["status"],
+                last_completed_stop_index=int(row["last_completed_stop_index"]),
+                next_stop_index=None if row["next_stop_index"] is None else int(row["next_stop_index"]),
+                started_at=parse_datetime_value(row["started_at"]),
+                completed_at=parse_datetime_value(row["completed_at"]),
+                updated_at=parse_datetime_value(row["updated_at"]),
+            )
+            for row in connection.execute(
+                """
+                SELECT
+                    route_id,
+                    status,
+                    last_completed_stop_index,
+                    next_stop_index,
+                    started_at,
+                    completed_at,
+                    updated_at
+                FROM route_execution
+                ORDER BY route_id
+                """
+            )
+        }
+        route_cargo_state = {
+            (
+                int(row["route_id"]),
+                row["stop_node_id"],
+                row["product_id"],
+            ): RouteCargoExecutionState(
+                route_id=int(row["route_id"]),
+                stop_node_id=row["stop_node_id"],
+                product_id=row["product_id"],
+                qty_reserved_kg=float(row["qty_reserved_kg"]),
+                qty_loaded_kg=float(row["qty_loaded_kg"]),
+                qty_delivered_kg=float(row["qty_delivered_kg"]),
+            )
+            for row in connection.execute(
+                """
+                SELECT
+                    route_id,
+                    stop_node_id,
+                    product_id,
+                    qty_reserved_kg,
+                    qty_loaded_kg,
+                    qty_delivered_kg
+                FROM route_cargo_state
+                ORDER BY route_id, stop_node_id, product_id
+                """
+            )
+        }
+    finally:
+        connection.close()
+
+    return DynamicSolverInputs(
+        static_inputs=static_inputs,
+        active_routes=active_routes,
+        truck_states=truck_states,
+        route_execution=route_execution,
+        route_cargo_state=route_cargo_state,
+    )
+
+
 def persist_solve_result(
     database_path: Path,
     solve_result: SolveResult,
@@ -186,6 +333,7 @@ def persist_solve_result(
                 """
                 INSERT INTO routes(
                     truck_id,
+                    supersedes_route_id,
                     leg,
                     stops,
                     total_km,
@@ -201,10 +349,11 @@ def persist_solve_result(
                     created_at,
                     is_active
                 )
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     route_row["truck_id"],
+                    route_row.get("supersedes_route_id"),
                     route_row["leg"],
                     route_row["stops"],
                     route_row["total_km"],
@@ -254,6 +403,7 @@ def persist_solve_result(
                 for row in solve_result.warehouse_stock_table
             ],
         )
+        reset_execution_state_for_active_plan(connection)
 
         connection.commit()
     except Exception:

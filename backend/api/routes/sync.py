@@ -5,10 +5,16 @@ from pydantic import BaseModel
 
 from backend.config import get_settings
 from backend.database import (
+    apply_reroute_request,
     apply_urgent_request,
+    complete_route_stop,
+    complete_truck_loading,
+    depart_truck,
     run_solver_and_persist,
+    start_truck_loading,
     update_demand_current_stock,
     update_stock_after_shipment,
+    update_truck_position,
 )
 
 router = APIRouter(tags=["sync"])
@@ -98,10 +104,59 @@ def _apply_single_action(
             departure_time=_optional_str(action_payload, "departure_time"),
         )
 
+    if normalized_action in {"reroute", "/api/reroute"}:
+        return apply_reroute_request(
+            database_path=database_path,
+            node_id=_require_str(action_payload, "node_id"),
+            product_id=_require_str(action_payload, "product_id"),
+            qty=_require_float(action_payload, "qty"),
+            departure_time=_optional_str(action_payload, "departure_time"),
+            reroute_reason=_optional_str(action_payload, "reroute_reason"),
+            allow_in_progress=_optional_bool(action_payload, "allow_in_progress", default=True),
+        )
+
     if normalized_action in {"solve", "/api/solve"}:
         return run_solver_and_persist(
             database_path=database_path,
             departure_time=_optional_str(action_payload, "departure_time"),
+        )
+
+    if normalized_action in {"truck.loading.start", "/api/trucks/loading/start"}:
+        return start_truck_loading(
+            database_path=database_path,
+            truck_id=_require_str(action_payload, "truck_id"),
+            updated_at=_optional_str(action_payload, "updated_at"),
+        )
+
+    if normalized_action in {"truck.loading.complete", "/api/trucks/loading/complete"}:
+        return complete_truck_loading(
+            database_path=database_path,
+            truck_id=_require_str(action_payload, "truck_id"),
+            updated_at=_optional_str(action_payload, "updated_at"),
+        )
+
+    if normalized_action in {"truck.depart", "/api/trucks/depart"}:
+        return depart_truck(
+            database_path=database_path,
+            truck_id=_require_str(action_payload, "truck_id"),
+            updated_at=_optional_str(action_payload, "updated_at"),
+        )
+
+    if normalized_action in {"truck.position", "/api/trucks/position"}:
+        return update_truck_position(
+            database_path=database_path,
+            truck_id=_require_str(action_payload, "truck_id"),
+            current_lat=_require_float(action_payload, "current_lat"),
+            current_lon=_require_float(action_payload, "current_lon"),
+            current_node_id=_optional_str(action_payload, "current_node_id"),
+            updated_at=_optional_str(action_payload, "updated_at"),
+        )
+
+    if normalized_action in {"route.stop_complete", "/api/routes/stop-complete"}:
+        return complete_route_stop(
+            database_path=database_path,
+            route_id=_require_int(action_payload, "route_id"),
+            completed_at=_optional_str(action_payload, "completed_at"),
         )
 
     raise ValueError(f"Unsupported batch action: {action_name}")
@@ -128,3 +183,19 @@ def _require_float(payload: dict[str, object], key: str) -> float:
     if not isinstance(value, (int, float)):
         raise ValueError(f"Field '{key}' must be numeric")
     return float(value)
+
+
+def _require_int(payload: dict[str, object], key: str) -> int:
+    value = payload.get(key)
+    if not isinstance(value, int):
+        raise ValueError(f"Field '{key}' must be an integer")
+    return value
+
+
+def _optional_bool(payload: dict[str, object], key: str, *, default: bool) -> bool:
+    value = payload.get(key)
+    if value is None:
+        return default
+    if not isinstance(value, bool):
+        raise ValueError(f"Field '{key}' must be a boolean")
+    return value

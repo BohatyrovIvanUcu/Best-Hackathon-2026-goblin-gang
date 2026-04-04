@@ -59,6 +59,19 @@ def _migrate_warehouse_stock_constraint(connection: sqlite3.Connection) -> bool:
     return True
 
 
+def _column_exists(connection: sqlite3.Connection, table_name: str, column_name: str) -> bool:
+    rows = connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return any(str(row[1]) == column_name for row in rows)
+
+
+def _migrate_routes_supersedes_column(connection: sqlite3.Connection) -> bool:
+    if _column_exists(connection, "routes", "supersedes_route_id"):
+        return False
+
+    connection.execute("ALTER TABLE routes ADD COLUMN supersedes_route_id INTEGER DEFAULT NULL;")
+    return True
+
+
 def initialize_database(database_path: Path) -> None:
     database_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -67,6 +80,8 @@ def initialize_database(database_path: Path) -> None:
         connection.execute("PRAGMA foreign_keys = ON;")
         _apply_schema(connection)
         if _migrate_warehouse_stock_constraint(connection):
+            _apply_schema(connection)
+        if _migrate_routes_supersedes_column(connection):
             _apply_schema(connection)
         _seed_default_settings(connection)
         connection.commit()

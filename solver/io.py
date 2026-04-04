@@ -82,6 +82,54 @@ class Product:
 
 
 @dataclass(frozen=True, slots=True)
+class TruckLiveState:
+    truck_id: str
+    status: str
+    active_route_id: int | None
+    current_node_id: str | None
+    current_lat: float | None
+    current_lon: float | None
+    last_completed_stop_index: int
+    remaining_capacity_kg: float
+    updated_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class RouteExecutionState:
+    route_id: int
+    status: str
+    last_completed_stop_index: int
+    next_stop_index: int | None
+    started_at: datetime | None
+    completed_at: datetime | None
+    updated_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class RouteCargoExecutionState:
+    route_id: int
+    stop_node_id: str
+    product_id: str
+    qty_reserved_kg: float
+    qty_loaded_kg: float
+    qty_delivered_kg: float
+
+    @property
+    def qty_onboard_kg(self) -> float:
+        return round(max(0.0, self.qty_loaded_kg - self.qty_delivered_kg), 2)
+
+
+@dataclass(frozen=True, slots=True)
+class ActiveRouteSnapshot:
+    route_id: int
+    truck_id: str
+    leg: int
+    stops: tuple[str, ...]
+    cargo_by_stop_product: dict[DemandKey, float]
+    supersedes_route_id: int | None
+
+
+@dataclass(frozen=True, slots=True)
 class SolverInputs:
     nodes: dict[str, Node]
     edges: list[Edge]
@@ -91,6 +139,26 @@ class SolverInputs:
     warehouse_stock: dict[DemandKey, WarehouseStockRecord]
     products: dict[str, Product]
     settings: dict[str, SettingsValue]
+
+
+@dataclass(frozen=True, slots=True)
+class DynamicSolverInputs:
+    static_inputs: SolverInputs
+    active_routes: dict[int, ActiveRouteSnapshot]
+    truck_states: dict[str, TruckLiveState]
+    route_execution: dict[int, RouteExecutionState]
+    route_cargo_state: dict[tuple[int, str, str], RouteCargoExecutionState]
+
+
+@dataclass(frozen=True, slots=True)
+class RerouteResult:
+    reroute_reason: str
+    changed_truck_ids: tuple[str, ...]
+    unchanged_truck_ids: tuple[str, ...]
+    route_id_mapping: dict[int, int]
+    locked_prefix_by_route_id: dict[int, tuple[str, ...]]
+    routes: list[dict[str, object]]
+    summary: dict[str, object]
 
 
 def load_nodes_csv(csv_path: str | Path) -> dict[str, Node]:
@@ -407,14 +475,20 @@ def _write_csv_rows(
 
 
 __all__ = [
+    "ActiveRouteSnapshot",
     "DemandKey",
     "DemandRecord",
+    "DynamicSolverInputs",
     "Edge",
     "Node",
     "Product",
+    "RerouteResult",
+    "RouteCargoExecutionState",
+    "RouteExecutionState",
     "SettingsValue",
     "SolverInputs",
     "Truck",
+    "TruckLiveState",
     "WarehouseStockRecord",
     "load_demand_csv",
     "load_edges_csv",
