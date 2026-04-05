@@ -8,6 +8,25 @@ from solver.priority import compute_priority
 from backend.db.constants import ALLOWED_SETTINGS_KEYS
 from backend.db.helpers import connect, format_kg, normalize_setting_update_value, serialize_setting_value
 
+PRIORITY_VALUES = {"NORMAL", "ELEVATED", "CRITICAL"}
+
+
+def _resolve_effective_priority(
+    *,
+    current_stock: float,
+    min_stock: float,
+    is_urgent: bool,
+    manual_priority_override: str | None,
+) -> str:
+    if manual_priority_override:
+        return manual_priority_override
+
+    return compute_priority(
+        current_stock=current_stock,
+        min_stock=min_stock,
+        is_urgent=is_urgent,
+    )
+
 
 def update_stock_after_shipment(
     database_path: Path,
@@ -92,7 +111,15 @@ def update_demand_current_stock(
         connection.execute("BEGIN")
         row = connection.execute(
             """
-            SELECT node_id, product_id, current_stock, min_stock, requested_qty, priority, is_urgent
+            SELECT
+                node_id,
+                product_id,
+                current_stock,
+                min_stock,
+                requested_qty,
+                priority,
+                is_urgent,
+                manual_priority_override
             FROM demand
             WHERE node_id = ? AND product_id = ?
             """,
@@ -106,10 +133,15 @@ def update_demand_current_stock(
         min_stock = float(row["min_stock"])
         previous_priority = str(row["priority"])
         requested_qty = round(max(0.0, min_stock - current_stock), 2)
-        next_priority = compute_priority(
+        next_priority = _resolve_effective_priority(
             current_stock=current_stock,
             min_stock=min_stock,
             is_urgent=bool(row["is_urgent"]),
+            manual_priority_override=(
+                str(row["manual_priority_override"])
+                if row["manual_priority_override"] is not None
+                else None
+            ),
         )
         updated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -145,6 +177,87 @@ def update_demand_current_stock(
         "priority": next_priority,
         "priority_changed": next_priority != previous_priority,
         "previous_priority": previous_priority,
+    }
+
+
+def update_store_priority_override(
+    database_path: Path,
+    node_id: str,
+    priority: str | None,
+) -> dict[str, object]:
+    normalized_priority = priority.upper() if isinstance(priority, str) else None
+    if normalized_priority is not None and normalized_priority not in PRIORITY_VALUES:
+        allowed = ", ".join(sorted(PRIORITY_VALUES))
+        raise ValueError(f"Пріоритет має бути одним із: {allowed}")
+
+    connection = connect(database_path)
+    try:
+        connection.execute("BEGIN")
+        node_row = connection.execute(
+            "SELECT id, name, type FROM nodes WHERE id = ?",
+            (node_id,),
+        ).fetchone()
+        if node_row is None:
+            raise LookupError(f"Магазин {node_id} не знайдено")
+        if str(node_row["type"]) != "store":
+            raise ValueError("Ручний пріоритет можна змінювати лише для магазинів")
+
+        demand_rows = connection.execute(
+            """
+            SELECT product_id, current_stock, min_stock, is_urgent
+            FROM demand
+            WHERE node_id = ?
+            ORDER BY product_id
+            """,
+            (node_id,),
+        ).fetchall()
+        if not demand_rows:
+            raise LookupError(f"Для магазину {node_id} не знайдено рядків попиту")
+
+        updated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        updated_rows = []
+        for row in demand_rows:
+            effective_priority = _resolve_effective_priority(
+                current_stock=float(row["current_stock"]),
+                min_stock=float(row["min_stock"]),
+                is_urgent=bool(row["is_urgent"]),
+                manual_priority_override=normalized_priority,
+            )
+            connection.execute(
+                """
+                UPDATE demand
+                SET priority = ?, manual_priority_override = ?, updated_at = ?
+                WHERE node_id = ? AND product_id = ?
+                """,
+                (
+                    effective_priority,
+                    normalized_priority,
+                    updated_at,
+                    node_id,
+                    row["product_id"],
+                ),
+            )
+            updated_rows.append(
+                {
+                    "product_id": row["product_id"],
+                    "priority": effective_priority,
+                    "manual_priority_override": normalized_priority,
+                }
+            )
+
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+    return {
+        "status": "ok",
+        "node_id": node_id,
+        "node_name": node_row["name"],
+        "manual_priority_override": normalized_priority,
+        "updated_rows": updated_rows,
     }
 
 

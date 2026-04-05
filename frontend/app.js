@@ -5,7 +5,9 @@ const state = {
   demand: [],
   routes: [],
   stock: [],
-  routeDetails: new Map(),
+  warehouses: [],
+  selectedWarehouseId: readStoredWarehouseId(),
+  warehouseDashboard: null,
   isBusy: false,
   mapViewport: {
     scale: 1,
@@ -41,11 +43,16 @@ const elements = {
   networkMap: document.getElementById("network-map"),
   demandList: document.getElementById("demand-list"),
   routesList: document.getElementById("routes-list"),
-  warehouseRoutes: document.getElementById("warehouse-routes"),
-  stockList: document.getElementById("stock-list"),
+  warehouseSelect: document.getElementById("warehouse-select"),
+  warehouseSummary: document.getElementById("warehouse-summary"),
+  warehouseAlerts: document.getElementById("warehouse-alerts"),
+  warehouseInbound: document.getElementById("warehouse-inbound"),
+  warehouseOutbound: document.getElementById("warehouse-outbound"),
+  warehouseStock: document.getElementById("warehouse-stock"),
 };
 
 const ROUTE_COLORS = ["#2563eb", "#f97316", "#8b5cf6", "#0f9f6e", "#dc2626", "#0891b2"];
+const WAREHOUSE_STORAGE_KEY = "logiflow.selectedWarehouseId";
 const MAP_ZOOM = {
   min: 1,
   max: 6,
@@ -61,12 +68,22 @@ async function init() {
   await safeAction("Початкове завантаження", async () => {
     await loadHealth();
     await refreshAllData();
+    await fetchTruckPositions();
   });
+  startAnimationLoop();
 }
 
 function bindEvents() {
   elements.dispatcherTab.addEventListener("click", () => switchView("dispatcher"));
   elements.warehouseTab.addEventListener("click", () => switchView("warehouse"));
+  elements.warehouseSelect.addEventListener("change", () => {
+    const nextWarehouseId = elements.warehouseSelect.value;
+    state.selectedWarehouseId = nextWarehouseId || null;
+    persistSelectedWarehouseId(state.selectedWarehouseId);
+    safeAction("Перемикаю робоче місце складу", async () => {
+      await refreshWarehouseDashboard();
+    });
+  });
   elements.loadDemoButton.addEventListener("click", () => {
     safeAction("Завантажую локальний демо-набір", async () => {
       await apiPost("/api/demo/load");
@@ -105,10 +122,10 @@ function switchView(view) {
   elements.warehouseView.classList.toggle("hidden", dispatcherActive);
   elements.dispatcherTab.classList.toggle("active", dispatcherActive);
   elements.warehouseTab.classList.toggle("active", !dispatcherActive);
-  if (view === "warehouse" && state.routes.length && state.routeDetails.size === 0) {
-    safeAction("Підвантажую деталі для складу", async () => {
-      await loadRouteDetails();
-      renderWarehouseRoutes();
+  if (view === "warehouse") {
+    safeAction("Готую локальну чергу складу", async () => {
+      await loadWarehouses();
+      await refreshWarehouseDashboard();
     });
   }
 }
@@ -131,28 +148,51 @@ async function refreshAllData(loadDetails = false) {
   state.routes = Array.isArray(routesResponse.routes) ? routesResponse.routes : [];
   state.stock = Array.isArray(stockResponse.stock) ? stockResponse.stock : [];
 
-  if ((loadDetails || state.activeView === "warehouse") && state.routes.length > 0) {
-    await loadRouteDetails();
-  } else if (!state.routes.length) {
-    state.routeDetails = new Map();
+  if (state.activeView === "warehouse") {
+    await loadWarehouses();
+    await refreshWarehouseDashboard();
   }
 
   renderAll();
+  fetchTruckPositions();
 }
 
-async function loadRouteDetails() {
-  const detailsEntries = await Promise.all(
-    state.routes.map(async (route) => {
-      try {
-        const detail = await apiGet(`/api/routes/${encodeURIComponent(route.truck_id)}`);
-        return [route.truck_id, detail];
-      } catch (error) {
-        return [route.truck_id, { error: error.message }];
-      }
-    })
-  );
+async function loadWarehouses() {
+  const response = await apiGet("/api/warehouses");
+  state.warehouses = Array.isArray(response.warehouses) ? response.warehouses : [];
+  if (!state.warehouses.length) {
+    state.selectedWarehouseId = null;
+    state.warehouseDashboard = null;
+    return;
+  }
 
-  state.routeDetails = new Map(detailsEntries);
+  const selectedExists = state.warehouses.some((warehouse) => warehouse.id === state.selectedWarehouseId);
+  if (!selectedExists) {
+    state.selectedWarehouseId = state.warehouses[0].id;
+    persistSelectedWarehouseId(state.selectedWarehouseId);
+  }
+}
+
+async function refreshWarehouseDashboard() {
+  if (!state.warehouses.length) {
+    state.warehouseDashboard = null;
+    renderWarehouseDashboard();
+    return;
+  }
+  if (!state.selectedWarehouseId) {
+    state.selectedWarehouseId = state.warehouses[0]?.id || null;
+    persistSelectedWarehouseId(state.selectedWarehouseId);
+  }
+  if (!state.selectedWarehouseId) {
+    state.warehouseDashboard = null;
+    renderWarehouseDashboard();
+    return;
+  }
+
+  state.warehouseDashboard = await apiGet(
+    `/api/warehouses/${encodeURIComponent(state.selectedWarehouseId)}/dashboard`
+  );
+  renderWarehouseDashboard();
 }
 
 function renderAll() {
@@ -160,8 +200,7 @@ function renderAll() {
   renderMap();
   renderDemand();
   renderRoutes();
-  renderWarehouseRoutes();
-  renderStock();
+  renderWarehouseDashboard();
 }
 
 function renderSummary() {
@@ -270,12 +309,28 @@ function renderMap() {
         <span class="map-gesture-hint">Колесо: масштаб, перетягування: панорама</span>
         <span class="map-zoom-readout">Масштаб <strong data-map-zoom-level>100%</strong></span>
       </div>
+      <div class="sim-controls">
+        <label class="sim-label">
+          <input type="checkbox" id="sim-mode-toggle"> Симуляція
+        </label>
+        <div id="sim-slider-row" style="display:none" class="sim-slider-row">
+          <span id="sim-time-display" class="sim-time-display">08:00</span>
+          <input type="range" id="sim-time-slider" class="sim-slider" min="0" max="1439" step="1" value="480">
+          <select id="sim-speed-select" class="sim-speed-select">
+            <option value="0">Пауза</option>
+            <option value="1">1x</option>
+            <option value="10" selected>10x</option>
+            <option value="60">60x</option>
+          </select>
+        </div>
+      </div>
     </div>
     <div class="map-viewport" data-map-viewport data-labels="compact">
       <div class="map-scene" data-map-scene>
         <svg class="map-svg" viewBox="0 0 1000 520" preserveAspectRatio="none">
           ${svgLines.join("")}
           ${svgPoints}
+          <g id="truck-layer"></g>
         </svg>
       </div>
     </div>
@@ -300,6 +355,7 @@ function renderMap() {
   });
 
   setupMapInteractions();
+  bindSimControls();
 }
 
 function renderDemand() {
@@ -312,6 +368,8 @@ function renderDemand() {
     .slice(0, 12)
     .map((item) => {
       const priorityClass = priorityClassName(item.priority);
+      const manualPriority = item.manual_priority_override || "AUTO";
+      const priorityInputId = `priority-${item.node_id}-${item.product_id}`;
       return `
         <article class="card ${priorityClass}">
           <div class="card-header">
@@ -328,6 +386,22 @@ function renderDemand() {
             Зараз у магазині: ${roundValue(item.current_stock)} кг із мінімуму
             ${roundValue(item.min_stock)} кг.
           </p>
+          <div class="field-inline priority-inline">
+            <label class="field-label" for="${escapeHtml(priorityInputId)}">Пріоритет магазину</label>
+            <select
+              id="${escapeHtml(priorityInputId)}"
+              class="priority-select"
+              data-store-priority-select
+            >
+              <option value="AUTO" ${manualPriority === "AUTO" ? "selected" : ""}>Авто</option>
+              <option value="NORMAL" ${manualPriority === "NORMAL" ? "selected" : ""}>NORMAL</option>
+              <option value="ELEVATED" ${manualPriority === "ELEVATED" ? "selected" : ""}>ELEVATED</option>
+              <option value="CRITICAL" ${manualPriority === "CRITICAL" ? "selected" : ""}>CRITICAL</option>
+            </select>
+            <button class="mini-button light" data-store-priority="${escapeHtml(item.node_id)}">
+              Застосувати пріоритет
+            </button>
+          </div>
           <div class="field-inline">
             <input type="number" min="1" step="1" value="${Math.max(1, Math.round(Number(item.requested_qty || 1)))}"
               data-urgent-qty="${escapeHtml(item.node_id)}|${escapeHtml(item.product_id)}">
@@ -354,6 +428,24 @@ function renderDemand() {
           qty,
           departure_time: "08:00",
         });
+        await refreshAllData(true);
+      });
+    });
+  });
+
+  elements.demandList.querySelectorAll("[data-store-priority]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const nodeId = button.dataset.storePriority;
+      const card = button.closest(".card");
+      const select = card?.querySelector("[data-store-priority-select]");
+      const selectedPriority = select?.value || "AUTO";
+      await safeAction(`Оновлюю пріоритет магазину ${nodeId}`, async () => {
+        await apiPost(`/api/stores/${encodeURIComponent(nodeId)}/priority`, {
+          priority: selectedPriority === "AUTO" ? null : selectedPriority,
+        });
+        if (state.routes.length) {
+          await apiPost("/api/solve", { departure_time: "08:00" });
+        }
         await refreshAllData(true);
       });
     });
@@ -393,80 +485,257 @@ function renderRoutes() {
     .join("");
 }
 
-function renderWarehouseRoutes() {
-  if (!state.routes.length) {
-    elements.warehouseRoutes.innerHTML = emptyCard("Після побудови маршрутів тут з'являться машини для складу.");
+function renderWarehouseDashboard() {
+  renderWarehouseSelector();
+
+  if (!state.warehouses.length) {
+    elements.warehouseSummary.innerHTML = "";
+    elements.warehouseAlerts.innerHTML = emptyCard("Спочатку завантаж демо або згенеруй мережу зі складами.");
+    elements.warehouseInbound.innerHTML = emptyCard("Коли з'являться склади, тут буде локальна вхідна черга.");
+    elements.warehouseOutbound.innerHTML = emptyCard("Коли з'являться склади, тут буде локальна вихідна черга.");
+    elements.warehouseStock.innerHTML = emptyCard("Локальні залишки з'являться після вибору складу.");
     return;
   }
 
-  elements.warehouseRoutes.innerHTML = state.routes
-    .map((route) => {
-      const detail = state.routeDetails.get(route.truck_id);
-      const detailRoute = detail?.route;
-      const execution = detailRoute?.execution || route.execution || {};
-      const truckState = execution.truck_state || {};
-      const firstStop = detailRoute?.stops_details?.[0];
-      const nextStop = detailRoute?.stops_details?.[execution.next_stop_index ?? 0];
-      const loadItems = Array.isArray(firstStop?.cargo_to_load) ? firstStop.cargo_to_load : [];
-      const allowedActions = getAllowedActions(execution);
-      const itemList = loadItems.length
-        ? `<ul class="small-list">${loadItems
-            .map(
-              (item) =>
-                `<li>${escapeHtml(item.product_name)}: ${roundValue(item.qty_kg)} кг для ${escapeHtml(item.for_store)}</li>`
-            )
-            .join("")}</ul>`
-        : `<p class="meta">Тут немає вантажу для завантаження або деталі ще не завантажились.</p>`;
+  if (!state.warehouseDashboard) {
+    elements.warehouseSummary.innerHTML = "";
+    elements.warehouseAlerts.innerHTML = emptyCard("Підвантажую локальну панель складу.");
+    elements.warehouseInbound.innerHTML = emptyCard("Підвантажую вхідні рейси.");
+    elements.warehouseOutbound.innerHTML = emptyCard("Підвантажую вихідні рейси.");
+    elements.warehouseStock.innerHTML = emptyCard("Підвантажую локальні залишки.");
+    return;
+  }
 
-      return `
+  renderWarehouseSummary();
+  renderWarehouseAlerts();
+  renderWarehouseInbound();
+  renderWarehouseOutbound();
+  renderWarehouseStock();
+}
+
+function renderWarehouseSelector() {
+  const selectedId = state.selectedWarehouseId || "";
+  elements.warehouseSelect.innerHTML = state.warehouses.length
+    ? state.warehouses
+        .map(
+          (warehouse) => `
+            <option value="${escapeHtml(warehouse.id)}" ${warehouse.id === selectedId ? "selected" : ""}>
+              ${escapeHtml(warehouse.name)}
+            </option>
+          `
+        )
+        .join("")
+    : `<option value="">Склади ще не завантажені</option>`;
+  elements.warehouseSelect.disabled = state.isBusy || !state.warehouses.length;
+}
+
+function renderWarehouseSummary() {
+  const dashboard = state.warehouseDashboard;
+  const warehouseName = dashboard?.warehouse?.name || "Склад";
+  const summary = dashboard?.summary || {};
+  elements.warehouseSummary.innerHTML = [
+    summaryCard("Склад", warehouseName),
+    summaryCard("Вхідні рейси", summary.inbound_count || 0),
+    summaryCard("Вихідні рейси", summary.outbound_count || 0),
+    summaryCard("Чекає приймання", summary.waiting_receive_count || 0),
+    summaryCard("Мало запасу", summary.low_stock_count || 0),
+    summaryCard("Блок по комплектуванню", summary.blocked_outbound_count || 0),
+  ].join("");
+}
+
+function renderWarehouseAlerts() {
+  const alerts = Array.isArray(state.warehouseDashboard?.alerts) ? state.warehouseDashboard.alerts : [];
+  if (!alerts.length) {
+    elements.warehouseAlerts.innerHTML = emptyCard("Локальних алертів поки немає.");
+    return;
+  }
+
+  elements.warehouseAlerts.innerHTML = alerts
+    .map(
+      (alert) => `
+        <article class="card alert-card ${alert.level || "info"}">
+          <div class="card-header">
+            <div>
+              <h3 class="card-title">${escapeHtml(alertTitle(alert.level))}</h3>
+            </div>
+          </div>
+          <p class="meta">${escapeHtml(alert.text || "")}</p>
+        </article>
+      `
+    )
+    .join("");
+}
+
+function renderWarehouseInbound() {
+  const inbound = Array.isArray(state.warehouseDashboard?.inbound) ? state.warehouseDashboard.inbound : [];
+  if (!inbound.length) {
+    elements.warehouseInbound.innerHTML = emptyCard("Для цього складу зараз немає активних вхідних поставок.");
+    return;
+  }
+
+  elements.warehouseInbound.innerHTML = inbound
+    .map(
+      (route) => `
         <article class="card">
           <div class="card-header">
             <div>
               <h3 class="card-title">${escapeHtml(route.truck_name)}</h3>
-              <div class="pill neutral">${escapeHtml(truckState.status || "idle")}</div>
+              <div class="pill neutral">${escapeHtml(route.worker_status)}</div>
             </div>
             <div class="meta">
-              Маршрут #${escapeHtml(String(route.id))}<br>
-              Наступна точка: ${escapeHtml(nextStop?.node_name || "очікує")}
+              Звідки: <strong>${escapeHtml(route.from_node_name || "невідомо")}</strong><br>
+              ETA: ${escapeHtml(route.scheduled_time || "немає даних")}
             </div>
           </div>
           <p class="meta">
-            1. Завантажити товар<br>
-            2. Підтвердити готовність<br>
-            3. Відправити машину<br>
-            4. Позначити наступну зупинку виконаною
+            Статус рейсу: <strong>${escapeHtml(route.route_status || "planned")}</strong><br>
+            Статус машини: <strong>${escapeHtml(route.truck_status || "idle")}</strong>
           </p>
-          ${itemList}
+          <ul class="small-list">
+            ${route.items
+              .map(
+                (item) =>
+                  `<li>${escapeHtml(item.product_name)}: ${roundValue(item.qty_kg)} кг</li>`
+              )
+              .join("")}
+          </ul>
           <div class="action-grid">
-            <button class="mini-button light" data-action="start-loading" data-truck="${escapeHtml(route.truck_id)}" ${allowedActions.startLoading ? "" : "disabled"}>Почати завантаження</button>
-            <button class="mini-button primary" data-action="complete-loading" data-truck="${escapeHtml(route.truck_id)}" ${allowedActions.completeLoading ? "" : "disabled"}>Завантажено</button>
-            <button class="mini-button success" data-action="depart" data-truck="${escapeHtml(route.truck_id)}" ${allowedActions.depart ? "" : "disabled"}>Машина виїхала</button>
-            <button class="mini-button warning" data-action="stop-complete" data-route="${escapeHtml(String(route.id))}" ${allowedActions.completeStop ? "" : "disabled"}>Наступну зупинку виконано</button>
+            <button
+              class="mini-button light"
+              data-warehouse-arrive="${escapeHtml(String(route.route_id))}"
+              ${route.can_arrive ? "" : "disabled"}
+            >
+              Підтвердити прибуття
+            </button>
+            <button
+              class="mini-button success"
+              data-warehouse-receive="${escapeHtml(String(route.route_id))}"
+              ${route.can_receive ? "" : "disabled"}
+            >
+              Прийняти поставку
+            </button>
           </div>
+        </article>
+      `
+    )
+    .join("");
+
+  elements.warehouseInbound.querySelectorAll("[data-warehouse-arrive]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const routeId = button.dataset.warehouseArrive;
+      await safeAction("Підтверджую прибуття фури на склад", async () => {
+        await apiPost(
+          `/api/warehouses/${encodeURIComponent(state.selectedWarehouseId)}/inbound/${encodeURIComponent(routeId)}/arrive`,
+          {}
+        );
+        await refreshAllData(true);
+      });
+    });
+  });
+
+  elements.warehouseInbound.querySelectorAll("[data-warehouse-receive]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const routeId = button.dataset.warehouseReceive;
+      await safeAction("Приймаю поставку на склад", async () => {
+        await apiPost(
+          `/api/warehouses/${encodeURIComponent(state.selectedWarehouseId)}/inbound/${encodeURIComponent(routeId)}/receive`,
+          {}
+        );
+        await refreshAllData(true);
+      });
+    });
+  });
+}
+
+function renderWarehouseOutbound() {
+  const outbound = Array.isArray(state.warehouseDashboard?.outbound) ? state.warehouseDashboard.outbound : [];
+  if (!outbound.length) {
+    elements.warehouseOutbound.innerHTML = emptyCard("Для цього складу зараз немає активних вихідних рейсів.");
+    return;
+  }
+
+  elements.warehouseOutbound.innerHTML = outbound
+    .map(
+      (route) => `
+        <article class="card">
+          <div class="card-header">
+            <div>
+              <h3 class="card-title">${escapeHtml(route.truck_name)}</h3>
+              <div class="pill neutral">${escapeHtml(route.worker_status)}</div>
+            </div>
+            <div class="meta">
+              Наступна точка: <strong>${escapeHtml(route.next_stop_name || "очікує")}</strong><br>
+              ${roundValue(route.total_km)} км · ${roundValue(route.total_cost)} грн
+            </div>
+          </div>
+          <p class="meta">
+            До видачі ще: <strong>${roundValue(route.total_reserved_kg)} кг</strong><br>
+            Уже видано в машину: <strong>${roundValue(route.total_loaded_kg)} кг</strong>
+          </p>
           <div class="mini-actions">
-            ${loadItems
+            ${route.items
               .map(
                 (item) => `
                   <button
-                    class="mini-button"
-                    data-action="ship-stock"
-                    data-warehouse="${escapeHtml(firstStop?.node_id || "")}"
-                    data-product="${escapeHtml(item.product_id)}"
-                    data-qty="${escapeHtml(String(item.qty_kg))}"
-                    ${allowedActions.shipStock ? "" : "disabled"}
+                    class="mini-button ${item.is_issued ? "light issued" : ""}"
+                    data-issue-item="${escapeHtml(String(route.route_id))}|${escapeHtml(item.stop_node_id)}|${escapeHtml(item.product_id)}"
+                    ${item.is_issued ? "disabled" : ""}
                   >
-                    Списати ${roundValue(item.qty_kg)} кг ${escapeHtml(item.product_name)}
+                    ${item.is_issued ? "Видано" : "Видати"} ${roundValue(item.qty_reserved_kg || item.qty_loaded_kg)} кг
+                    ${escapeHtml(item.product_name)} для ${escapeHtml(item.stop_node_name)}
                   </button>
                 `
               )
               .join("")}
           </div>
+          <div class="action-grid">
+            <button
+              class="mini-button light"
+              data-action="start-loading"
+              data-truck="${escapeHtml(route.truck_id)}"
+              ${route.can_start_loading ? "" : "disabled"}
+            >
+              Почати завантаження
+            </button>
+            <button
+              class="mini-button primary"
+              data-action="complete-loading"
+              data-truck="${escapeHtml(route.truck_id)}"
+              ${route.can_complete_loading ? "" : "disabled"}
+            >
+              Завантаження завершене
+            </button>
+            <button
+              class="mini-button success"
+              data-action="depart"
+              data-truck="${escapeHtml(route.truck_id)}"
+              ${route.can_depart ? "" : "disabled"}
+            >
+              Відправити фуру
+            </button>
+          </div>
         </article>
-      `;
-    })
+      `
+    )
     .join("");
 
-  elements.warehouseRoutes.querySelectorAll("[data-action]").forEach((button) => {
+  elements.warehouseOutbound.querySelectorAll("[data-issue-item]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const [routeId, stopNodeId, productId] = button.dataset.issueItem.split("|");
+      await safeAction("Списую товар у вихідний рейс", async () => {
+        await apiPost(
+          `/api/warehouses/${encodeURIComponent(state.selectedWarehouseId)}/outbound/${encodeURIComponent(routeId)}/issue-item`,
+          {
+            stop_node_id: stopNodeId,
+            product_id: productId,
+          }
+        );
+        await refreshAllData(true);
+      });
+    });
+  });
+
+  elements.warehouseOutbound.querySelectorAll("[data-action]").forEach((button) => {
     button.addEventListener("click", async () => {
       const action = button.dataset.action;
       if (action === "start-loading") {
@@ -484,49 +753,36 @@ function renderWarehouseRoutes() {
           await apiPost(`/api/trucks/${encodeURIComponent(button.dataset.truck)}/depart`, {});
           await refreshAllData(true);
         });
-      } else if (action === "stop-complete") {
-        await safeAction("Позначаю наступну зупинку як виконану", async () => {
-          await apiPost(`/api/routes/${encodeURIComponent(button.dataset.route)}/stop-complete`, {});
-          await refreshAllData(true);
-        });
-      } else if (action === "ship-stock") {
-        await safeAction("Оновлюю склад після відвантаження", async () => {
-          await apiPost("/api/stock/update", {
-            warehouse_id: button.dataset.warehouse,
-            product_id: button.dataset.product,
-            qty_shipped_kg: Number(button.dataset.qty),
-          });
-          await refreshAllData(true);
-        });
       }
     });
   });
 }
 
-function renderStock() {
-  if (!state.stock.length) {
-    elements.stockList.innerHTML = emptyCard("Складські залишки з'являться після завантаження даних.");
+function renderWarehouseStock() {
+  const stock = Array.isArray(state.warehouseDashboard?.stock) ? state.warehouseDashboard.stock : [];
+  if (!stock.length) {
+    elements.warehouseStock.innerHTML = emptyCard("Для цього складу поки немає рядків залишку.");
     return;
   }
 
-  elements.stockList.innerHTML = state.stock
-    .map((item) => {
-      const lowStockClass = Number(item.available_kg) < 100 ? "low-stock" : "";
-      return `
-        <article class="card ${lowStockClass}">
+  elements.warehouseStock.innerHTML = stock
+    .map(
+      (item) => `
+        <article class="card ${item.is_low ? "low-stock" : ""}">
           <div class="row-between">
             <div>
-              <h3 class="card-title">${escapeHtml(item.warehouse_name)}</h3>
-              <p class="meta">${escapeHtml(item.product_name)}</p>
+              <h3 class="card-title">${escapeHtml(item.product_name)}</h3>
+              <p class="meta">Лише вибраний склад без повторів назв складів у кожній картці</p>
             </div>
             <div class="meta">
               Доступно: <strong>${roundValue(item.available_kg)} кг</strong><br>
+              Всього: ${roundValue(item.quantity_kg)} кг<br>
               Резерв: ${roundValue(item.reserved_kg)} кг
             </div>
           </div>
         </article>
-      `;
-    })
+      `
+    )
     .join("");
 }
 
@@ -560,6 +816,10 @@ function setBusy(isBusy) {
   ].forEach((element) => {
     element.disabled = isBusy;
   });
+
+  if (elements.warehouseSelect) {
+    elements.warehouseSelect.disabled = isBusy || !state.warehouses.length;
+  }
 }
 
 function showMessage(message, type) {
@@ -680,6 +940,36 @@ function getAllowedActions(execution) {
     completeStop: truckStatus === "en_route" && routeStatus === "in_progress",
     shipStock: truckStatus === "loading" || truckStatus === "loaded",
   };
+}
+
+function readStoredWarehouseId() {
+  try {
+    return window.localStorage.getItem(WAREHOUSE_STORAGE_KEY);
+  } catch (error) {
+    return null;
+  }
+}
+
+function persistSelectedWarehouseId(warehouseId) {
+  try {
+    if (warehouseId) {
+      window.localStorage.setItem(WAREHOUSE_STORAGE_KEY, warehouseId);
+    } else {
+      window.localStorage.removeItem(WAREHOUSE_STORAGE_KEY);
+    }
+  } catch (error) {
+    // Ignore storage failures in demo mode.
+  }
+}
+
+function alertTitle(level) {
+  if (level === "warning") {
+    return "Потрібна увага";
+  }
+  if (level === "success") {
+    return "Все під контролем";
+  }
+  return "Операційний сигнал";
 }
 
 function shortLabel(name) {
@@ -941,6 +1231,8 @@ function updateMapGeometry() {
       .join(" ");
     routeElement.setAttribute("points", polyline);
   });
+
+  refreshTruckLayer();
 }
 
 function calculateExpandedPoints(basePoints, scale) {
@@ -1070,4 +1362,276 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
+}
+
+// ─── Truck Animation ──────────────────────────────────────────────────────────
+
+const simState = {
+  isSimMode: false,
+  simMinutes: 480,
+  simSpeed: 10,
+  animFrameId: null,
+  lastFrameTs: 0,
+  lastPollTs: 0,
+  truckData: [],
+};
+
+function parseTimeToMinutes(hhMm) {
+  const [h, m] = String(hhMm || "0:0").split(":").map(Number);
+  return (h || 0) * 60 + (m || 0);
+}
+
+function formatMinutesToHHMM(totalMinutes) {
+  const wrapped = ((totalMinutes % 1440) + 1440) % 1440;
+  const h = Math.floor(wrapped / 60);
+  const m = Math.floor(wrapped % 60);
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+function getSimulationMinutes() {
+  if (simState.isSimMode) {
+    return simState.simMinutes;
+  }
+  const now = new Date();
+  return now.getHours() * 60 + now.getMinutes() + now.getSeconds() / 60;
+}
+
+function computeTruckPosition(route, simMinutes, expandedPointById, routeIndex) {
+  const color = ROUTE_COLORS[routeIndex % ROUTE_COLORS.length];
+  const base = { color, truckId: route.truck_id, truckName: route.truck_name };
+
+  const waypoints = [];
+  let epochMinutes = null;
+
+  for (const event of (route.timeline || [])) {
+    if (!event.node_id || !event.time) continue;
+    if (!["departure", "arrival", "return"].includes(event.event)) continue;
+
+    const mins = parseTimeToMinutes(event.time);
+    if (epochMinutes === null) epochMinutes = mins;
+    const adjusted = mins < epochMinutes - 30 ? mins + 1440 : mins;
+
+    const last = waypoints[waypoints.length - 1];
+    if (last && last.node_id === event.node_id && last.minutes === adjusted) continue;
+
+    waypoints.push({ node_id: event.node_id, minutes: adjusted });
+  }
+
+  if (waypoints.length === 0) {
+    const p = expandedPointById.get(route.stops[0]);
+    if (!p) return null;
+    return { ...base, x: p.x, y: p.y, phase: "waiting" };
+  }
+
+  const firstMins = waypoints[0].minutes;
+  const lastMins = waypoints[waypoints.length - 1].minutes;
+
+  if (simMinutes < firstMins) {
+    const p = expandedPointById.get(waypoints[0].node_id);
+    if (!p) return null;
+    return { ...base, x: p.x, y: p.y, phase: "waiting" };
+  }
+
+  if (simMinutes >= lastMins) {
+    const p = expandedPointById.get(waypoints[waypoints.length - 1].node_id);
+    if (!p) return null;
+    return { ...base, x: p.x, y: p.y, phase: "completed" };
+  }
+
+  for (let i = 0; i < waypoints.length - 1; i++) {
+    const from = waypoints[i];
+    const to = waypoints[i + 1];
+
+    if (simMinutes < from.minutes || simMinutes >= to.minutes) continue;
+
+    const fromPoint = expandedPointById.get(from.node_id);
+    const toPoint = expandedPointById.get(to.node_id);
+    if (!fromPoint || !toPoint) return null;
+
+    if (from.node_id === to.node_id) {
+      return { ...base, x: fromPoint.x, y: fromPoint.y, phase: "at_stop" };
+    }
+
+    const t = (simMinutes - from.minutes) / (to.minutes - from.minutes);
+    return {
+      ...base,
+      x: fromPoint.x + (toPoint.x - fromPoint.x) * t,
+      y: fromPoint.y + (toPoint.y - fromPoint.y) * t,
+      phase: "en_route",
+    };
+  }
+
+  return null;
+}
+
+function refreshTruckLayer() {
+  if (!simState.truckData.length || !state.mapLayout.points.length) return;
+
+  const svg = elements.networkMap.querySelector(".map-svg");
+  if (!svg) return;
+
+  let layer = svg.querySelector("#truck-layer");
+  if (!layer) {
+    layer = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    layer.setAttribute("id", "truck-layer");
+    svg.appendChild(layer);
+  }
+
+  const expandedPoints = calculateExpandedPoints(state.mapLayout.points, state.mapViewport.scale);
+  const pointById = new Map(expandedPoints.map((p) => [p.id, p]));
+  const simMins = getSimulationMinutes();
+
+  const positions = simState.truckData
+    .map((route, i) => computeTruckPosition(route, simMins, pointById, i))
+    .filter(Boolean);
+
+  const existing = new Map(
+    [...layer.querySelectorAll(".truck-icon")].map((el) => [el.dataset.truckId, el])
+  );
+
+  positions.forEach((pos) => {
+    let g = existing.get(pos.truckId);
+    if (!g) {
+      g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+      g.setAttribute("class", "truck-icon");
+      g.dataset.truckId = pos.truckId;
+
+      const halo = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      halo.setAttribute("class", "truck-halo");
+      halo.setAttribute("r", "18");
+
+      const body = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      body.setAttribute("class", "truck-body");
+      body.setAttribute("r", "11");
+      body.setAttribute("stroke", "white");
+      body.setAttribute("stroke-width", "2.5");
+
+      const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      label.setAttribute("class", "truck-label");
+      label.setAttribute("text-anchor", "middle");
+      label.setAttribute("dominant-baseline", "central");
+      label.setAttribute("font-size", "11");
+      label.setAttribute("fill", "white");
+      label.setAttribute("font-weight", "700");
+      label.setAttribute("pointer-events", "none");
+      label.textContent = "T";
+
+      g.appendChild(halo);
+      g.appendChild(body);
+      g.appendChild(label);
+
+      g.addEventListener("click", () => {
+        const phaseLabel = {
+          en_route: "В дорозі",
+          at_stop: "На зупинці",
+          waiting: "Очікує",
+          completed: "Завершено",
+        }[pos.phase] || pos.phase;
+        showMessage(`${pos.truckName} · ${phaseLabel}`, "info");
+      });
+
+      layer.appendChild(g);
+    }
+
+    g.setAttribute("transform", `translate(${pos.x.toFixed(1)}, ${pos.y.toFixed(1)})`);
+
+    const halo = g.querySelector(".truck-halo");
+    const body = g.querySelector(".truck-body");
+
+    if (pos.phase === "en_route") {
+      body.setAttribute("fill", pos.color);
+      body.setAttribute("opacity", "0.95");
+      halo.setAttribute("fill", pos.color);
+      halo.setAttribute("opacity", "0.2");
+      halo.removeAttribute("display");
+    } else if (pos.phase === "at_stop") {
+      body.setAttribute("fill", pos.color);
+      body.setAttribute("opacity", "0.75");
+      halo.setAttribute("display", "none");
+    } else {
+      body.setAttribute("fill", "#94a3b8");
+      body.setAttribute("opacity", "0.5");
+      halo.setAttribute("display", "none");
+    }
+
+    existing.delete(pos.truckId);
+  });
+
+  existing.forEach((el) => el.remove());
+}
+
+async function fetchTruckPositions() {
+  try {
+    const data = await apiGet("/api/trucks/positions");
+    if (Array.isArray(data.trucks)) {
+      simState.truckData = data.trucks;
+    }
+  } catch (_) {
+    // silently ignore — animation continues with cached data
+  }
+}
+
+function startAnimationLoop() {
+  if (simState.animFrameId !== null) return;
+
+  function tick(ts) {
+    simState.animFrameId = requestAnimationFrame(tick);
+
+    if (simState.isSimMode && simState.simSpeed > 0 && simState.lastFrameTs > 0) {
+      const realElapsedSec = (ts - simState.lastFrameTs) / 1000;
+      simState.simMinutes = (simState.simMinutes + realElapsedSec * simState.simSpeed) % 1440;
+
+      const slider = document.getElementById("sim-time-slider");
+      if (slider) slider.value = Math.round(simState.simMinutes);
+      const display = document.getElementById("sim-time-display");
+      if (display) display.textContent = formatMinutesToHHMM(simState.simMinutes);
+    }
+    simState.lastFrameTs = ts;
+
+    if (!simState.isSimMode && ts - simState.lastPollTs > 3000) {
+      simState.lastPollTs = ts;
+      fetchTruckPositions();
+    }
+
+    refreshTruckLayer();
+  }
+
+  simState.animFrameId = requestAnimationFrame(tick);
+}
+
+function stopAnimationLoop() {
+  if (simState.animFrameId !== null) {
+    cancelAnimationFrame(simState.animFrameId);
+    simState.animFrameId = null;
+  }
+}
+
+function bindSimControls() {
+  const toggle = document.getElementById("sim-mode-toggle");
+  const sliderRow = document.getElementById("sim-slider-row");
+  const slider = document.getElementById("sim-time-slider");
+  const display = document.getElementById("sim-time-display");
+  const speedSelect = document.getElementById("sim-speed-select");
+
+  if (!toggle || !sliderRow || !slider || !display || !speedSelect) return;
+
+  toggle.checked = simState.isSimMode;
+  sliderRow.style.display = simState.isSimMode ? "" : "none";
+  slider.value = Math.round(simState.simMinutes);
+  display.textContent = formatMinutesToHHMM(simState.simMinutes);
+  speedSelect.value = String(simState.simSpeed);
+
+  toggle.addEventListener("change", () => {
+    simState.isSimMode = toggle.checked;
+    sliderRow.style.display = simState.isSimMode ? "" : "none";
+  });
+
+  slider.addEventListener("input", () => {
+    simState.simMinutes = Number(slider.value);
+    display.textContent = formatMinutesToHHMM(simState.simMinutes);
+  });
+
+  speedSelect.addEventListener("change", () => {
+    simState.simSpeed = Number(speedSelect.value);
+  });
 }

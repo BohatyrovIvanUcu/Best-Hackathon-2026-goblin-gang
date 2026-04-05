@@ -72,6 +72,41 @@ def _migrate_routes_supersedes_column(connection: sqlite3.Connection) -> bool:
     return True
 
 
+def _migrate_demand_manual_priority_override_column(connection: sqlite3.Connection) -> bool:
+    if _column_exists(connection, "demand", "manual_priority_override"):
+        return False
+
+    connection.execute(
+        """
+        ALTER TABLE demand
+        ADD COLUMN manual_priority_override TEXT DEFAULT NULL
+        CHECK (manual_priority_override IS NULL OR manual_priority_override IN ('NORMAL', 'ELEVATED', 'CRITICAL'));
+        """
+    )
+    return True
+
+
+def _migrate_route_execution_worker_columns(connection: sqlite3.Connection) -> bool:
+    changed = False
+    if not _column_exists(connection, "route_execution", "warehouse_arrived_at"):
+        connection.execute(
+            """
+            ALTER TABLE route_execution
+            ADD COLUMN warehouse_arrived_at TEXT DEFAULT NULL;
+            """
+        )
+        changed = True
+    if not _column_exists(connection, "route_execution", "warehouse_received_at"):
+        connection.execute(
+            """
+            ALTER TABLE route_execution
+            ADD COLUMN warehouse_received_at TEXT DEFAULT NULL;
+            """
+        )
+        changed = True
+    return changed
+
+
 def initialize_database(database_path: Path) -> None:
     database_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -82,6 +117,10 @@ def initialize_database(database_path: Path) -> None:
         if _migrate_warehouse_stock_constraint(connection):
             _apply_schema(connection)
         if _migrate_routes_supersedes_column(connection):
+            _apply_schema(connection)
+        if _migrate_demand_manual_priority_override_column(connection):
+            _apply_schema(connection)
+        if _migrate_route_execution_worker_columns(connection):
             _apply_schema(connection)
         _seed_default_settings(connection)
         connection.commit()

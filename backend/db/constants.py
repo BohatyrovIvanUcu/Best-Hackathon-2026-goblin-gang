@@ -52,6 +52,8 @@ CREATE TABLE IF NOT EXISTS route_execution (
     last_completed_stop_index INTEGER NOT NULL DEFAULT 0 CHECK (last_completed_stop_index >= 0),
     next_stop_index INTEGER DEFAULT 1 CHECK (next_stop_index IS NULL OR next_stop_index >= 0),
     started_at TEXT DEFAULT NULL,
+    warehouse_arrived_at TEXT DEFAULT NULL,
+    warehouse_received_at TEXT DEFAULT NULL,
     completed_at TEXT DEFAULT NULL,
     updated_at TEXT NOT NULL,
     FOREIGN KEY (route_id) REFERENCES routes(id) ON DELETE CASCADE

@@ -12,12 +12,16 @@ from backend.database import (
     complete_route_stop,
     complete_truck_loading,
     depart_truck,
+    fetch_warehouse_dashboard_data,
     fetch_route_by_truck_id,
     fetch_route_execution_data,
     fetch_routes_data,
+    issue_outbound_route_item,
     import_demo_data,
     initialize_database,
     load_dynamic_solver_inputs_from_db,
+    mark_inbound_route_arrived,
+    receive_inbound_route,
     run_solver_and_persist,
     start_truck_loading,
 )
@@ -138,6 +142,180 @@ class ExecutionRoutingTests(unittest.TestCase):
             connection.close()
         return database_path
 
+    def seed_warehouse_worker_db(self) -> Path:
+        database_path = self.create_db_path()
+        initialize_database(database_path)
+        connection = connect(database_path)
+        try:
+            connection.execute("BEGIN")
+            connection.executemany(
+                """
+                INSERT INTO nodes(id, name, type, capacity_kg, lat, lon)
+                VALUES(?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    ("F1", "Завод 1", "factory", 5000.0, 50.45, 30.50),
+                    ("W1", "Склад Київ", "warehouse", 5000.0, 50.46, 30.52),
+                    ("S1", "Магазин 1", "store", 100.0, 50.47, 30.54),
+                ],
+            )
+            connection.executemany(
+                """
+                INSERT INTO products(id, name, weight_kg, length_cm, width_cm, height_cm)
+                VALUES(?, ?, 1.0, 1.0, 1.0, 1.0)
+                """,
+                [
+                    ("P1", "Вода",),
+                    ("P2", "Батарейки",),
+                ],
+            )
+            connection.executemany(
+                """
+                INSERT INTO trucks(
+                    id,
+                    name,
+                    type,
+                    capacity_kg,
+                    fuel_per_100km,
+                    depot_node_id,
+                    driver_hourly,
+                    avg_speed_kmh,
+                    amortization_per_km,
+                    maintenance_per_km
+                )
+                VALUES(?, ?, 'truck', ?, 10.0, ?, 100.0, 50.0, 1.0, 1.0)
+                """,
+                [
+                    ("TIN", "Вхідна фура", 300.0, "F1"),
+                    ("TOUT", "Вихідна фура", 300.0, "W1"),
+                ],
+            )
+            connection.executemany(
+                """
+                INSERT INTO warehouse_stock(warehouse_id, product_id, quantity_kg, reserved_kg)
+                VALUES(?, ?, ?, ?)
+                """,
+                [
+                    ("W1", "P1", 500.0, 80.0),
+                    ("W1", "P2", 220.0, 60.0),
+                ],
+            )
+            created_at = "2026-04-05 08:00:00"
+            timeline_inbound = (
+                '[{"node_id":"F1","event":"departure","time":"08:00"},'
+                '{"node_id":"W1","event":"arrival","time":"09:30"},'
+                '{"node_id":"F1","event":"return","time":"11:00"}]'
+            )
+            timeline_outbound = (
+                '[{"node_id":"W1","event":"departure","time":"10:00"},'
+                '{"node_id":"S1","event":"arrival","time":"11:00"},'
+                '{"node_id":"W1","event":"return","time":"12:00"}]'
+            )
+            connection.executemany(
+                """
+                INSERT INTO routes(
+                    id,
+                    truck_id,
+                    supersedes_route_id,
+                    leg,
+                    stops,
+                    total_km,
+                    total_cost,
+                    drive_hours,
+                    total_elapsed_h,
+                    days,
+                    departure_time,
+                    arrival_time,
+                    time_status,
+                    time_warning,
+                    timeline,
+                    created_at,
+                    is_active
+                )
+                VALUES(?, ?, NULL, ?, ?, ?, ?, ?, ?, 1, ?, ?, 'ok', NULL, ?, ?, 1)
+                """,
+                [
+                    (1, "TIN", 1, '["F1", "W1", "F1"]', 42.0, 900.0, 2.0, 3.0, "08:00", "11:00", timeline_inbound, created_at),
+                    (2, "TOUT", 2, '["W1", "S1", "W1"]', 18.0, 450.0, 1.0, 2.0, "10:00", "12:00", timeline_outbound, created_at),
+                ],
+            )
+            connection.executemany(
+                """
+                INSERT INTO route_cargo(route_id, stop_node_id, product_id, qty_kg)
+                VALUES(?, ?, ?, ?)
+                """,
+                [
+                    (1, "W1", "P1", 120.0),
+                    (2, "S1", "P1", 80.0),
+                    (2, "S1", "P2", 60.0),
+                ],
+            )
+            connection.executemany(
+                """
+                INSERT INTO route_execution(
+                    route_id,
+                    status,
+                    last_completed_stop_index,
+                    next_stop_index,
+                    started_at,
+                    warehouse_arrived_at,
+                    warehouse_received_at,
+                    completed_at,
+                    updated_at
+                )
+                VALUES(?, 'planned', 0, 1, NULL, NULL, NULL, NULL, ?)
+                """,
+                [
+                    (1, created_at),
+                    (2, created_at),
+                ],
+            )
+            connection.executemany(
+                """
+                INSERT INTO route_cargo_state(
+                    route_id,
+                    stop_node_id,
+                    product_id,
+                    qty_reserved_kg,
+                    qty_loaded_kg,
+                    qty_delivered_kg
+                )
+                VALUES(?, ?, ?, ?, 0, 0)
+                """,
+                [
+                    (1, "W1", "P1", 120.0),
+                    (2, "S1", "P1", 80.0),
+                    (2, "S1", "P2", 60.0),
+                ],
+            )
+            connection.executemany(
+                """
+                INSERT INTO truck_state(
+                    truck_id,
+                    status,
+                    active_route_id,
+                    current_node_id,
+                    current_lat,
+                    current_lon,
+                    last_completed_stop_index,
+                    remaining_capacity_kg,
+                    updated_at
+                )
+                VALUES(?, 'idle', ?, ?, NULL, NULL, 0, ?, ?)
+                """,
+                [
+                    ("TIN", 1, "F1", 300.0, created_at),
+                    ("TOUT", 2, "W1", 300.0, created_at),
+                ],
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        return database_path
+
     def first_truck_with_active_route(self, database_path: Path) -> str:
         connection = connect(database_path)
         try:
@@ -171,6 +349,21 @@ class ExecutionRoutingTests(unittest.TestCase):
         self.assertIsNotNone(row)
         self.assertIsNotNone(row["active_route_id"])
         return int(row["active_route_id"])
+
+    def issue_all_active_route_items_if_needed(self, database_path: Path, truck_id: str) -> None:
+        route_payload = fetch_route_by_truck_id(database_path, truck_id)["route"]
+        if int(route_payload["leg"]) != 2:
+            return
+        warehouse_id = str(route_payload["stops"][0])
+        load_items = route_payload["stops_details"][0]["cargo_to_load"]
+        for item in load_items:
+            issue_outbound_route_item(
+                database_path,
+                warehouse_id=warehouse_id,
+                route_id=int(route_payload["id"]),
+                stop_node_id=str(item["for_store"]),
+                product_id=str(item["product_id"]),
+            )
 
     def test_initialize_database_creates_execution_tables_and_supersedes_column(self) -> None:
         database_path = self.create_db_path()
@@ -251,6 +444,7 @@ class ExecutionRoutingTests(unittest.TestCase):
         route_id = self.active_route_id_for_truck(database_path, truck_id)
 
         start_truck_loading(database_path, truck_id=truck_id)
+        self.issue_all_active_route_items_if_needed(database_path, truck_id)
         result = complete_truck_loading(database_path, truck_id=truck_id)
 
         connection = connect(database_path)
@@ -289,6 +483,7 @@ class ExecutionRoutingTests(unittest.TestCase):
         route_id = self.active_route_id_for_truck(database_path, truck_id)
 
         start_truck_loading(database_path, truck_id=truck_id)
+        self.issue_all_active_route_items_if_needed(database_path, truck_id)
         complete_truck_loading(database_path, truck_id=truck_id)
         depart_truck(database_path, truck_id=truck_id)
 
@@ -313,6 +508,98 @@ class ExecutionRoutingTests(unittest.TestCase):
         detail_payload = fetch_route_by_truck_id(database_path, route_item["truck_id"])
         self.assertIn("execution", detail_payload["route"])
         self.assertIn("cargo_state", detail_payload["route"]["execution"])
+
+    def test_warehouse_dashboard_is_scoped_to_selected_warehouse(self) -> None:
+        database_path = self.seed_demo_db()
+        run_solver_and_persist(database_path)
+
+        kyiv_dashboard = fetch_warehouse_dashboard_data(database_path, "WAREHOUSE_1")
+        kharkiv_dashboard = fetch_warehouse_dashboard_data(database_path, "WAREHOUSE_2")
+
+        self.assertEqual("WAREHOUSE_1", kyiv_dashboard["warehouse"]["id"])
+        self.assertEqual("WAREHOUSE_2", kharkiv_dashboard["warehouse"]["id"])
+        self.assertTrue(all(route["from_node_name"] for route in kyiv_dashboard["inbound"]))
+        self.assertTrue(
+            all(route["items"] for route in kyiv_dashboard["outbound"]),
+            "Outbound routes should include item-level warehouse issue rows",
+        )
+        self.assertNotEqual(
+            {route["route_id"] for route in kyiv_dashboard["outbound"]},
+            {route["route_id"] for route in kharkiv_dashboard["outbound"]},
+        )
+
+    def test_inbound_arrive_then_receive_updates_stock_and_queue(self) -> None:
+        database_path = self.seed_warehouse_worker_db()
+
+        dashboard_before = fetch_warehouse_dashboard_data(database_path, "W1")
+        inbound_route = dashboard_before["inbound"][0]
+        received_item = inbound_route["items"][0]
+        stock_before = next(
+            row for row in dashboard_before["stock"] if row["product_id"] == received_item["product_id"]
+        )
+
+        with self.assertRaises(ValueError):
+            receive_inbound_route(database_path, warehouse_id="W1", route_id=inbound_route["route_id"])
+
+        mark_inbound_route_arrived(
+            database_path,
+            warehouse_id="W1",
+            route_id=inbound_route["route_id"],
+        )
+        dashboard_arrived = fetch_warehouse_dashboard_data(database_path, "W1")
+        same_route_after_arrive = next(
+            route for route in dashboard_arrived["inbound"] if route["route_id"] == inbound_route["route_id"]
+        )
+        self.assertFalse(same_route_after_arrive["can_arrive"])
+        self.assertTrue(same_route_after_arrive["can_receive"])
+
+        receive_inbound_route(
+            database_path,
+            warehouse_id="W1",
+            route_id=inbound_route["route_id"],
+        )
+        dashboard_after = fetch_warehouse_dashboard_data(database_path, "W1")
+        stock_after = next(
+            row for row in dashboard_after["stock"] if row["product_id"] == received_item["product_id"]
+        )
+
+        self.assertNotIn(
+            inbound_route["route_id"],
+            {route["route_id"] for route in dashboard_after["inbound"]},
+        )
+        self.assertAlmostEqual(
+            float(stock_before["quantity_kg"]) + float(received_item["qty_kg"]),
+            float(stock_after["quantity_kg"]),
+            places=2,
+        )
+
+    def test_outbound_items_must_be_issued_before_loading_complete(self) -> None:
+        database_path = self.seed_warehouse_worker_db()
+
+        dashboard = fetch_warehouse_dashboard_data(database_path, "W1")
+        outbound_route = dashboard["outbound"][0]
+        truck_id = outbound_route["truck_id"]
+
+        start_truck_loading(database_path, truck_id=truck_id)
+        with self.assertRaises(ValueError):
+            complete_truck_loading(database_path, truck_id=truck_id)
+
+        for item in outbound_route["items"]:
+            issue_outbound_route_item(
+                database_path,
+                warehouse_id="W1",
+                route_id=outbound_route["route_id"],
+                stop_node_id=item["stop_node_id"],
+                product_id=item["product_id"],
+            )
+
+        result = complete_truck_loading(database_path, truck_id=truck_id)
+        dashboard_after = fetch_warehouse_dashboard_data(database_path, "W1")
+        same_route = next(route for route in dashboard_after["outbound"] if route["route_id"] == outbound_route["route_id"])
+
+        self.assertEqual("loaded", result["truck_status"])
+        self.assertEqual(0.0, float(same_route["total_reserved_kg"]))
+        self.assertGreater(float(same_route["total_loaded_kg"]), 0.0)
 
     def test_reroute_replaces_idle_route_and_preserves_lineage(self) -> None:
         database_path = self.seed_small_db(demand_by_store={"S1": 10.0})
@@ -342,6 +629,7 @@ class ExecutionRoutingTests(unittest.TestCase):
         route_id = self.active_route_id_for_truck(database_path, truck_id)
 
         start_truck_loading(database_path, truck_id=truck_id)
+        self.issue_all_active_route_items_if_needed(database_path, truck_id)
         complete_truck_loading(database_path, truck_id=truck_id)
         depart_truck(database_path, truck_id=truck_id)
 
@@ -370,6 +658,7 @@ class ExecutionRoutingTests(unittest.TestCase):
         route_id = self.active_route_id_for_truck(database_path, truck_id)
 
         start_truck_loading(database_path, truck_id=truck_id)
+        self.issue_all_active_route_items_if_needed(database_path, truck_id)
         complete_truck_loading(database_path, truck_id=truck_id)
         depart_truck(database_path, truck_id=truck_id)
         complete_route_stop(database_path, route_id=route_id)

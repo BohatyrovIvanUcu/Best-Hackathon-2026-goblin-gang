@@ -94,23 +94,56 @@
         </section>
 
         <section id="warehouse-view" class="view-section hidden">
+          <section class="panel warehouse-shell">
+            <div class="panel-header warehouse-shell-header">
+              <div>
+                <h2>Робоче місце складу</h2>
+                <p class="warehouse-shell-copy">
+                  Обери свій склад на зміну й працюй лише зі своїми машинами,
+                  прийманням і локальними залишками.
+                </p>
+              </div>
+              <div class="warehouse-picker">
+                <label class="field-label" for="warehouse-select">Мій склад</label>
+                <select id="warehouse-select" class="priority-select"></select>
+              </div>
+            </div>
+            <div id="warehouse-summary" class="summary-cards"></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-header">
+              <h2>Швидкі алерти</h2>
+              <span class="hint">Тут видно, що блокує роботу саме цього складу</span>
+            </div>
+            <div id="warehouse-alerts" class="stack-list"></div>
+          </section>
+
           <div class="grid two-two">
             <section class="panel">
               <div class="panel-header">
-                <h2>Машини, які зараз у роботі</h2>
-                <span class="hint">Кнопки йдуть одна за одною, без зайвої складності</span>
+                <h2>Вхідні рейси</h2>
+                <span class="hint">Підтверди прибуття, потім прийми поставку на склад</span>
               </div>
-              <div id="warehouse-routes" class="stack-list"></div>
+              <div id="warehouse-inbound" class="stack-list"></div>
             </section>
 
             <section class="panel">
               <div class="panel-header">
-                <h2>Залишки на складах</h2>
-                <span class="hint">Якщо мало товару, картка стане червоною</span>
+                <h2>Вихідні рейси</h2>
+                <span class="hint">Комплектування, завантаження й відправка лише зі свого складу</span>
               </div>
-              <div id="stock-list" class="stack-list"></div>
+              <div id="warehouse-outbound" class="stack-list"></div>
             </section>
           </div>
+
+          <section class="panel">
+            <div class="panel-header">
+              <h2>Локальні залишки</h2>
+              <span class="hint">Тут лише товари вибраного складу, без глобальної мішанини</span>
+            </div>
+            <div id="warehouse-stock" class="stack-list"></div>
+          </section>
         </section>
       </main>
     </div>

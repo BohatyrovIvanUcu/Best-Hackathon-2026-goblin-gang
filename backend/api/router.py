@@ -10,7 +10,9 @@ from backend.api.routes.settings import router as settings_router
 from backend.api.routes.solve import router as solve_router
 from backend.api.routes.stock import router as stock_router
 from backend.api.routes.sync import router as sync_router
+from backend.api.routes.trucks import router as trucks_router
 from backend.api.routes.upload import router as upload_router
+from backend.api.routes.warehouses import router as warehouses_router
 
 api_router = APIRouter(prefix="/api")
 api_router.include_router(health_router)
@@ -22,5 +24,7 @@ api_router.include_router(routes_router)
 api_router.include_router(execution_router)
 api_router.include_router(solve_router)
 api_router.include_router(reroute_router)
+api_router.include_router(trucks_router)
 api_router.include_router(upload_router)
 api_router.include_router(sync_router)
+api_router.include_router(warehouses_router)
