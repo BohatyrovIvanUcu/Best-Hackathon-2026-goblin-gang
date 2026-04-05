@@ -73,6 +73,7 @@ document.addEventListener("DOMContentLoaded", init);
 
 async function init() {
   bindEvents();
+  bindSimControls();
   await safeAction("Початкове завантаження", async () => {
     await loadHealth();
     await refreshAllData();
@@ -202,6 +203,7 @@ function renderAll() {
   renderDemand();
   renderRoutes();
   renderWarehouseDashboard();
+  updateTimelapseBarVisibility();
 }
 
 function renderSummary() {
@@ -384,21 +386,6 @@ function renderMap() {
         <span class="map-gesture-hint">Колесо змінює масштаб, мишка рухає карту</span>
         <span class="map-zoom-readout">Масштаб <strong data-map-zoom-level>100%</strong></span>
       </div>
-      <div class="sim-controls">
-        <label class="sim-label">
-          <input type="checkbox" id="sim-mode-toggle"> Симуляція
-        </label>
-        <div id="sim-slider-row" style="display:none" class="sim-slider-row">
-          <span id="sim-time-display" class="sim-time-display">08:00</span>
-          <input type="range" id="sim-time-slider" class="sim-slider" min="0" max="1439" step="1" value="480">
-          <select id="sim-speed-select" class="sim-speed-select">
-            <option value="0">Пауза</option>
-            <option value="1">1x</option>
-            <option value="10" selected>10x</option>
-            <option value="60">60x</option>
-          </select>
-        </div>
-      </div>
     </div>
     <div class="map-viewport" data-map-viewport data-labels="compact">
       <div class="map-scene" data-map-scene>
@@ -443,7 +430,6 @@ function renderMap() {
   });
 
   setupMapInteractions();
-  bindSimControls();
 }
 
 function renderDemand() {
@@ -1657,9 +1643,10 @@ function escapeHtml(value) {
 // ─── Truck Animation ──────────────────────────────────────────────────────────
 
 const simState = {
-  isSimMode: false,
+  isSimMode: true,
   simMinutes: 480,
-  simSpeed: 10,
+  simSpeed: 0,
+  _lastSpeed: 10,
   animFrameId: null,
   lastFrameTs: 0,
   lastPollTs: 0,
@@ -1871,9 +1858,9 @@ function startAnimationLoop() {
       const realElapsedSec = (ts - simState.lastFrameTs) / 1000;
       simState.simMinutes = (simState.simMinutes + realElapsedSec * simState.simSpeed) % 1440;
 
-      const slider = document.getElementById("sim-time-slider");
+      const slider = document.getElementById("timelapse-slider");
       if (slider) slider.value = Math.round(simState.simMinutes);
-      const display = document.getElementById("sim-time-display");
+      const display = document.getElementById("timelapse-time");
       if (display) display.textContent = formatMinutesToHHMM(simState.simMinutes);
     }
     simState.lastFrameTs = ts;
@@ -1897,23 +1884,23 @@ function stopAnimationLoop() {
 }
 
 function bindSimControls() {
-  const toggle = document.getElementById("sim-mode-toggle");
-  const sliderRow = document.getElementById("sim-slider-row");
-  const slider = document.getElementById("sim-time-slider");
-  const display = document.getElementById("sim-time-display");
-  const speedSelect = document.getElementById("sim-speed-select");
+  const playBtn = document.getElementById("timelapse-play");
+  const slider = document.getElementById("timelapse-slider");
+  const display = document.getElementById("timelapse-time");
+  const speedSelect = document.getElementById("timelapse-speed");
 
-  if (!toggle || !sliderRow || !slider || !display || !speedSelect) return;
+  if (!playBtn || !slider || !display || !speedSelect) return;
 
-  toggle.checked = simState.isSimMode;
-  sliderRow.style.display = simState.isSimMode ? "" : "none";
-  slider.value = Math.round(simState.simMinutes);
-  display.textContent = formatMinutesToHHMM(simState.simMinutes);
-  speedSelect.value = String(simState.simSpeed);
+  syncTimelapseUI();
 
-  toggle.addEventListener("change", () => {
-    simState.isSimMode = toggle.checked;
-    sliderRow.style.display = simState.isSimMode ? "" : "none";
+  playBtn.addEventListener("click", () => {
+    if (simState.simSpeed > 0) {
+      simState._lastSpeed = simState.simSpeed;
+      simState.simSpeed = 0;
+    } else {
+      simState.simSpeed = simState._lastSpeed || Number(speedSelect.value) || 10;
+    }
+    syncTimelapseUI();
   });
 
   slider.addEventListener("input", () => {
@@ -1922,6 +1909,27 @@ function bindSimControls() {
   });
 
   speedSelect.addEventListener("change", () => {
-    simState.simSpeed = Number(speedSelect.value);
+    const v = Number(speedSelect.value);
+    if (simState.simSpeed > 0) simState.simSpeed = v;
+    simState._lastSpeed = v;
   });
+}
+
+function syncTimelapseUI() {
+  const playBtn = document.getElementById("timelapse-play");
+  const slider = document.getElementById("timelapse-slider");
+  const display = document.getElementById("timelapse-time");
+  if (playBtn) playBtn.textContent = simState.simSpeed > 0 ? "⏸" : "▶";
+  if (slider) slider.value = Math.round(simState.simMinutes);
+  if (display) display.textContent = formatMinutesToHHMM(simState.simMinutes);
+}
+
+function updateTimelapseBarVisibility() {
+  const bar = document.getElementById("timelapse-bar");
+  if (!bar) return;
+  const hasRoutes = state.routes.length > 0;
+  bar.classList.toggle("hidden", !hasRoutes);
+  if (hasRoutes) {
+    simState.isSimMode = true;
+  }
 }

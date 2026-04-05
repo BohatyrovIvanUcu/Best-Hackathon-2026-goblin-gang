@@ -83,6 +83,20 @@
                 <span class="hint">Натисни на точку, щоб побачити що там відбувається</span>
               </div>
               <div id="network-map" class="network-map"></div>
+              <div id="timelapse-bar" class="timelapse-bar hidden">
+                <button id="timelapse-play" class="timelapse-play-btn" aria-label="Грати/Пауза">▶</button>
+                <span class="timelapse-label">Час доби</span>
+                <span id="timelapse-time" class="timelapse-time">08:00</span>
+                <input type="range" id="timelapse-slider" class="timelapse-slider" min="0" max="1439" step="1" value="480">
+                <span id="timelapse-endtime" class="timelapse-endtime">24:00</span>
+                <select id="timelapse-speed" class="timelapse-speed">
+                  <option value="1">1×</option>
+                  <option value="10" selected>10×</option>
+                  <option value="60">60×</option>
+                  <option value="300">300×</option>
+                </select>
+                <span class="timelapse-speed-hint">швидкість</span>
+              </div>
               <div class="legend">
                 <span><i class="legend-dot factory"></i>Завод</span>
                 <span><i class="legend-dot warehouse"></i>Склад</span>
