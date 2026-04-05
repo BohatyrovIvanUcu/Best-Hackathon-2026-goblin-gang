@@ -34,7 +34,9 @@ const elements = {
   dispatcherTab: document.getElementById("dispatcher-tab"),
   warehouseTab: document.getElementById("warehouse-tab"),
   loadDemoButton: document.getElementById("load-demo-button"),
-  generateButton: document.getElementById("generate-button"),
+  generateSmallButton: document.getElementById("generate-small-button"),
+  generateMediumButton: document.getElementById("generate-medium-button"),
+  generateLargeButton: document.getElementById("generate-large-button"),
   solveButton: document.getElementById("solve-button"),
   refreshButton: document.getElementById("refresh-button"),
   summaryCards: document.getElementById("summary-cards"),
@@ -52,6 +54,11 @@ const MAP_ZOOM = {
   step: 1.18,
   labelsScaleThreshold: 1.35,
   clusterDistance: 22,
+};
+const MAP_SIZE = {
+  width: 1000,
+  height: 520,
+  padding: 88,
 };
 
 document.addEventListener("DOMContentLoaded", init);
@@ -73,18 +80,9 @@ function bindEvents() {
       await refreshAllData();
     });
   });
-  elements.generateButton.addEventListener("click", () => {
-    safeAction("Генерую нову невелику мережу", async () => {
-      await apiPost("/api/generate", {
-        n_factories: 2,
-        n_warehouses: 3,
-        n_stores: 10,
-        n_trucks: 5,
-        seed: 42,
-      });
-      await refreshAllData();
-    });
-  });
+  elements.generateSmallButton.addEventListener("click", () => generateNetwork("small", "малу"));
+  elements.generateMediumButton.addEventListener("click", () => generateNetwork("medium", "середню"));
+  elements.generateLargeButton.addEventListener("click", () => generateNetwork("large", "велику"));
   elements.solveButton.addEventListener("click", () => {
     safeAction("Будую маршрути для всіх машин", async () => {
       await apiPost("/api/solve", { departure_time: "08:00" });
@@ -95,6 +93,13 @@ function bindEvents() {
     safeAction("Оновлюю всі дані на екрані", async () => {
       await refreshAllData(true);
     });
+  });
+}
+
+function generateNetwork(scale, label) {
+  safeAction(`Генерую нову ${label} мережу`, async () => {
+    await apiPost("/api/generate", { scale });
+    await refreshAllData();
   });
 }
 
@@ -201,9 +206,38 @@ function renderMap() {
 
   const points = projectNodes(nodes);
   const pointById = new Map(points.map((point) => [point.id, point]));
-  const svgLines = [];
+  const svgContent = [];
   const seenPairs = new Set();
   const visibleEdges = [];
+  const routeNodeIds = new Set();
+  const routeEdgePairs = new Set();
+  const visibleRoutes = [];
+
+  state.routes.forEach((route, routeIndex) => {
+    const color = ROUTE_COLORS[routeIndex % ROUTE_COLORS.length];
+    const routePoints = route.stops
+      .map((stopId) => pointById.get(stopId))
+      .filter(Boolean);
+    if (routePoints.length < 2) {
+      return;
+    }
+
+    route.stops.forEach((stopId) => routeNodeIds.add(stopId));
+    route.stops.forEach((stopId, stopIndex) => {
+      const nextStopId = route.stops[stopIndex + 1];
+      if (!nextStopId) {
+        return;
+      }
+      routeEdgePairs.add([stopId, nextStopId].sort().join("|"));
+    });
+
+    visibleRoutes.push({ stops: route.stops });
+    const polyline = routePoints.map((point) => `${point.x},${point.y}`).join(" ");
+    svgContent.push(
+      `<polyline class="route-line route-line-halo" data-route-index="${visibleRoutes.length - 1}" points="${polyline}" stroke="${color}"></polyline>`,
+      `<polyline class="route-line route-line-core" data-route-index="${visibleRoutes.length - 1}" points="${polyline}" stroke="${color}"></polyline>`
+    );
+  });
 
   edges.forEach((edge) => {
     const from = pointById.get(edge.from_id);
@@ -217,48 +251,33 @@ function renderMap() {
     }
     seenPairs.add(pairKey);
     visibleEdges.push({ fromId: edge.from_id, toId: edge.to_id });
-    svgLines.push(
-      `<line class="map-edge" data-from-id="${escapeHtml(edge.from_id)}" data-to-id="${escapeHtml(edge.to_id)}" x1="${from.x}" y1="${from.y}" x2="${to.x}" y2="${to.y}" stroke="#b8c8d8" stroke-width="2" opacity="0.65"></line>`
-    );
-  });
-
-  const visibleRoutes = [];
-  state.routes.forEach((route, routeIndex) => {
-    const color = ROUTE_COLORS[routeIndex % ROUTE_COLORS.length];
-    const routePoints = route.stops
-      .map((stopId) => pointById.get(stopId))
-      .filter(Boolean);
-    if (routePoints.length < 2) {
-      return;
-    }
-    visibleRoutes.push({ stops: route.stops });
-    const polyline = routePoints.map((point) => `${point.x},${point.y}`).join(" ");
-    svgLines.push(
-      `<polyline class="route-line" data-route-index="${visibleRoutes.length - 1}" points="${polyline}" stroke="${color}" stroke-width="5"></polyline>`
+    const isRouteEdge = routeEdgePairs.has(pairKey);
+    svgContent.unshift(
+      `<line class="map-edge ${isRouteEdge ? "route-support-edge" : ""}" data-from-id="${escapeHtml(edge.from_id)}" data-to-id="${escapeHtml(edge.to_id)}" x1="${from.x}" y1="${from.y}" x2="${to.x}" y2="${to.y}"></line>`
     );
   });
 
   const svgPoints = points
     .map((point) => {
-      const fill = colorForNode(point);
-      const radius = point.type === "warehouse" ? 12 : point.type === "factory" ? 11 : 10;
-      const labelClass = point.type === "store" ? "map-label store-label" : "map-label hub-label";
+      const labelClass = buildMapLabelClass(point);
+      const isOnRoute = routeNodeIds.has(point.id);
+      const routeStateClass = isOnRoute ? "on-route" : "off-route";
       return `
-        <g class="map-node" data-node-id="${escapeHtml(point.id)}" data-base-x="${point.x}" data-base-y="${point.y}">
-          <circle
-            class="node-point"
-            cx="${point.x}"
-            cy="${point.y}"
-            r="${radius}"
-            fill="${fill}"
-            data-node-id="${escapeHtml(point.id)}"
-          ></circle>
-          <text class="${labelClass}" x="${point.x + 14}" y="${point.y - 12}">${escapeHtml(shortLabel(point.name))}</text>
+        <g
+          class="map-node ${routeStateClass}"
+          data-node-id="${escapeHtml(point.id)}"
+          data-base-x="${point.x}"
+          data-base-y="${point.y}"
+          data-node-shape="${escapeHtml(nodeShapeFor(point))}">
+          ${buildNodeShape(point)}
+          <text class="${labelClass}" x="${point.x + 16}" y="${point.y - 14}">${escapeHtml(shortLabel(point.name))}</text>
         </g>
       `;
     })
     .join("");
 
+  const criticalStores = nodes.filter((node) => node.type === "store" && node.priority === "CRITICAL").length;
+  const elevatedStores = nodes.filter((node) => node.type === "store" && node.priority === "ELEVATED").length;
   elements.networkMap.innerHTML = `
     <div class="map-toolbar">
       <div class="map-controls">
@@ -267,14 +286,31 @@ function renderMap() {
         <button type="button" class="map-control-button reset" data-map-reset>Скинути</button>
       </div>
       <div class="map-status">
+        <span class="map-metric-chip">Вузли ${nodes.length}</span>
+        <span class="map-metric-chip">Ребра ${visibleEdges.length}</span>
+        <span class="map-metric-chip">Critical ${criticalStores}</span>
+        <span class="map-metric-chip">Elevated ${elevatedStores}</span>
         <span class="map-gesture-hint">Колесо: масштаб, перетягування: панорама</span>
         <span class="map-zoom-readout">Масштаб <strong data-map-zoom-level>100%</strong></span>
       </div>
     </div>
     <div class="map-viewport" data-map-viewport data-labels="compact">
       <div class="map-scene" data-map-scene>
-        <svg class="map-svg" viewBox="0 0 1000 520" preserveAspectRatio="none">
-          ${svgLines.join("")}
+        <svg class="map-svg" viewBox="0 0 ${MAP_SIZE.width} ${MAP_SIZE.height}" preserveAspectRatio="xMidYMid meet">
+          <defs>
+            <filter id="route-glow" x="-20%" y="-20%" width="140%" height="140%">
+              <feGaussianBlur stdDeviation="4" result="blur"></feGaussianBlur>
+              <feMerge>
+                <feMergeNode in="blur"></feMergeNode>
+                <feMergeNode in="SourceGraphic"></feMergeNode>
+              </feMerge>
+            </filter>
+          </defs>
+          <rect class="map-plane" x="0" y="0" width="${MAP_SIZE.width}" height="${MAP_SIZE.height}" rx="28" ry="28"></rect>
+          <g class="map-grid">
+            ${buildMapGrid()}
+          </g>
+          ${svgContent.join("")}
           ${svgPoints}
         </svg>
       </div>
@@ -552,7 +588,9 @@ function setBusy(isBusy) {
   state.isBusy = isBusy;
   [
     elements.loadDemoButton,
-    elements.generateButton,
+    elements.generateSmallButton,
+    elements.generateMediumButton,
+    elements.generateLargeButton,
     elements.solveButton,
     elements.refreshButton,
     elements.dispatcherTab,
@@ -607,17 +645,26 @@ function projectNodes(nodes) {
   const lonMax = Math.max(...lonValues);
   const latMin = Math.min(...latValues);
   const latMax = Math.max(...latValues);
-  const width = 1000;
-  const height = 520;
-  const padding = 70;
+  const width = MAP_SIZE.width;
+  const height = MAP_SIZE.height;
+  const padding = MAP_SIZE.padding;
+  const usableWidth = width - padding * 2;
+  const usableHeight = height - padding * 2;
+  const lonRange = Math.max(lonMax - lonMin, 0.0001);
+  const latRange = Math.max(latMax - latMin, 0.0001);
+  const scale = Math.min(usableWidth / lonRange, usableHeight / latRange);
+  const offsetX = (width - lonRange * scale) / 2;
+  const offsetY = (height - latRange * scale) / 2;
 
-  return nodes.map((node) => {
+  const projected = nodes.map((node) => {
     const lon = Number(node.lon || 0);
     const lat = Number(node.lat || 0);
-    const x = scaleValue(lon, lonMin, lonMax, padding, width - padding);
-    const y = scaleValue(lat, latMin, latMax, height - padding, padding);
+    const x = offsetX + (lon - lonMin) * scale;
+    const y = offsetY + (latMax - lat) * scale;
     return { ...node, x, y };
   });
+
+  return relaxProjectedPoints(projected, width, height, padding);
 }
 
 function scaleValue(value, min, max, outMin, outMax) {
@@ -657,6 +704,83 @@ function colorForNode(node) {
     return "var(--warning)";
   }
   return "#16a34a";
+}
+
+function nodeShapeFor(node) {
+  if (node.type === "factory") {
+    return "diamond";
+  }
+  if (node.type === "warehouse") {
+    return "square";
+  }
+  return "circle";
+}
+
+function buildNodeShape(point) {
+  const fill = colorForNode(point);
+  const emphasisRing = point.type === "store" && point.priority === "CRITICAL"
+    ? `<circle class="node-ring critical" cx="${point.x}" cy="${point.y}" r="16"></circle>`
+    : point.type === "store" && point.priority === "ELEVATED"
+      ? `<circle class="node-ring elevated" cx="${point.x}" cy="${point.y}" r="15"></circle>`
+      : "";
+
+  if (point.type === "factory") {
+    return `
+      ${emphasisRing}
+      <rect
+        class="node-point diamond"
+        x="${point.x - 9}"
+        y="${point.y - 9}"
+        width="18"
+        height="18"
+        rx="4"
+        ry="4"
+        fill="${fill}"
+        transform="rotate(45 ${point.x} ${point.y})"
+      ></rect>
+    `;
+  }
+
+  if (point.type === "warehouse") {
+    return `
+      ${emphasisRing}
+      <rect
+        class="node-point square"
+        x="${point.x - 11}"
+        y="${point.y - 11}"
+        width="22"
+        height="22"
+        rx="7"
+        ry="7"
+        fill="${fill}"
+      ></rect>
+    `;
+  }
+
+  return `
+    ${emphasisRing}
+    <circle
+      class="node-point circle"
+      cx="${point.x}"
+      cy="${point.y}"
+      r="10"
+      fill="${fill}"
+      data-node-id="${escapeHtml(point.id)}"
+    ></circle>
+  `;
+}
+
+function buildMapLabelClass(point) {
+  if (point.type !== "store") {
+    return "map-label hub-label";
+  }
+  if (point.priority === "CRITICAL") {
+    return "map-label store-label critical-label";
+  }
+  if (point.priority === "ELEVATED") {
+    return "map-label store-label elevated-label";
+  }
+  return "map-label store-label normal-label";
 }
 
 function priorityClassName(priority) {
@@ -864,13 +988,17 @@ function clampMapViewport(viewport) {
     return { scale: MAP_ZOOM.min, x: 0, y: 0 };
   }
 
-  const minX = width - width * scale;
-  const minY = height - height * scale;
+  const overflowX = Math.max(width * 0.22, 120);
+  const overflowY = Math.max(height * 0.2, 96);
+  const minX = width - width * scale - overflowX;
+  const minY = height - height * scale - overflowY;
+  const maxX = overflowX;
+  const maxY = overflowY;
 
   return {
     scale,
-    x: clamp(state.mapViewport.x, minX, 0),
-    y: clamp(state.mapViewport.y, minY, 0),
+    x: clamp(state.mapViewport.x, minX, maxX),
+    y: clamp(state.mapViewport.y, minY, maxY),
   };
 }
 
@@ -898,13 +1026,18 @@ function updateMapGeometry() {
     const baseY = Number(nodeElement.getAttribute("data-base-y"));
     nodeElement.setAttribute("transform", `translate(${point.x - baseX} ${point.y - baseY})`);
 
-    const circle = nodeElement.querySelector(".node-point");
+    const shape = nodeElement.querySelector(".node-point");
+    const ring = nodeElement.querySelector(".node-ring");
     const label = nodeElement.querySelector(".map-label");
     const visuals = calculateNodeVisuals(point, state.mapViewport.scale);
 
-    if (circle) {
-      circle.setAttribute("r", visuals.rawRadius);
-      circle.setAttribute("stroke-width", visuals.rawStrokeWidth);
+    if (shape) {
+      updateNodeShapeGeometry(shape, point, visuals);
+    }
+
+    if (ring) {
+      ring.setAttribute("r", visuals.rawRingRadius);
+      ring.setAttribute("stroke-width", visuals.rawRingWidth);
     }
 
     if (label) {
@@ -962,7 +1095,7 @@ function calculateExpandedPoints(basePoints, scale) {
     };
     const sorted = [...cluster].sort(clusterPointSort);
     const angleStep = (Math.PI * 2) / sorted.length;
-    const spreadRadius = 8 + zoomProgress * 10 + Math.max(0, cluster.length - 3) * 3;
+    const spreadRadius = 10 + zoomProgress * 12 + Math.max(0, cluster.length - 3) * 4;
 
     sorted.forEach((point, index) => {
       const angle = -Math.PI / 2 + index * angleStep;
@@ -981,24 +1114,103 @@ function calculateExpandedPoints(basePoints, scale) {
 function calculateNodeVisuals(point, scale) {
   const zoomRatio = getZoomRatio(scale);
   const screenRadius = point.type === "store"
-    ? 15.2 + zoomRatio * 1.7
+    ? 14.8 + zoomRatio * 1.5
     : point.type === "warehouse"
-      ? 17.2 + zoomRatio * 1.8
-      : 16.4 + zoomRatio * 1.7;
-  const screenStrokeWidth = 2.4 + zoomRatio * 0.25;
+      ? 17.6 + zoomRatio * 2
+      : 16.8 + zoomRatio * 1.8;
+  const screenStrokeWidth = 2.6 + zoomRatio * 0.35;
+  const screenRingRadius = screenRadius + (point.priority === "CRITICAL" ? 7 : 5.5);
+  const screenRingWidth = point.priority === "CRITICAL" ? 3.4 : 2.6;
   const screenFontSize = point.type === "store"
-    ? 16 + zoomRatio * 1.5
-    : 17 + zoomRatio * 1.4;
-  const screenLabelOffsetX = 18 + zoomRatio * 2;
-  const screenLabelOffsetY = 15 + zoomRatio * 1.4;
+    ? 14.5 + zoomRatio * 1.4
+    : 16 + zoomRatio * 1.4;
+  const screenLabelOffsetX = 20 + zoomRatio * 2;
+  const screenLabelOffsetY = 16 + zoomRatio * 1.5;
 
   return {
     rawRadius: screenRadius / scale,
     rawStrokeWidth: screenStrokeWidth / scale,
+    rawRingRadius: screenRingRadius / scale,
+    rawRingWidth: screenRingWidth / scale,
     rawFontSize: screenFontSize / scale,
     rawLabelOffsetX: screenLabelOffsetX / scale,
     rawLabelOffsetY: screenLabelOffsetY / scale,
   };
+}
+
+function updateNodeShapeGeometry(shape, point, visuals) {
+  const nodeShape = shape.classList.contains("diamond")
+    ? "diamond"
+    : shape.classList.contains("square")
+      ? "square"
+      : "circle";
+
+  if (nodeShape === "circle") {
+    shape.setAttribute("r", visuals.rawRadius);
+    shape.setAttribute("stroke-width", visuals.rawStrokeWidth);
+    return;
+  }
+
+  const side = visuals.rawRadius * 2;
+  shape.setAttribute("x", point.x - side / 2);
+  shape.setAttribute("y", point.y - side / 2);
+  shape.setAttribute("width", side);
+  shape.setAttribute("height", side);
+  shape.setAttribute("stroke-width", visuals.rawStrokeWidth);
+  shape.setAttribute("rx", nodeShape === "square" ? visuals.rawRadius * 0.62 : visuals.rawRadius * 0.38);
+  shape.setAttribute("ry", nodeShape === "square" ? visuals.rawRadius * 0.62 : visuals.rawRadius * 0.38);
+  if (nodeShape === "diamond") {
+    shape.setAttribute("transform", `rotate(45 ${point.x} ${point.y})`);
+  }
+}
+
+function relaxProjectedPoints(points, width, height, padding) {
+  const relaxed = points.map((point) => ({ ...point, anchorX: point.x, anchorY: point.y }));
+  const minDistance = 38;
+  const spring = 0.04;
+
+  for (let iteration = 0; iteration < 44; iteration += 1) {
+    for (let index = 0; index < relaxed.length; index += 1) {
+      for (let candidateIndex = index + 1; candidateIndex < relaxed.length; candidateIndex += 1) {
+        const first = relaxed[index];
+        const second = relaxed[candidateIndex];
+        const dx = second.x - first.x;
+        const dy = second.y - first.y;
+        const distance = Math.hypot(dx, dy) || 0.001;
+        if (distance >= minDistance) {
+          continue;
+        }
+
+        const push = (minDistance - distance) / 2;
+        const offsetX = (dx / distance) * push;
+        const offsetY = (dy / distance) * push;
+        first.x -= offsetX;
+        first.y -= offsetY;
+        second.x += offsetX;
+        second.y += offsetY;
+      }
+    }
+
+    relaxed.forEach((point) => {
+      point.x += (point.anchorX - point.x) * spring;
+      point.y += (point.anchorY - point.y) * spring;
+      point.x = clamp(point.x, padding, width - padding);
+      point.y = clamp(point.y, padding, height - padding);
+    });
+  }
+
+  return relaxed.map(({ anchorX, anchorY, ...point }) => point);
+}
+
+function buildMapGrid() {
+  const lines = [];
+  for (let x = 80; x < MAP_SIZE.width; x += 80) {
+    lines.push(`<line x1="${x}" y1="0" x2="${x}" y2="${MAP_SIZE.height}"></line>`);
+  }
+  for (let y = 80; y < MAP_SIZE.height; y += 80) {
+    lines.push(`<line x1="0" y1="${y}" x2="${MAP_SIZE.width}" y2="${y}"></line>`);
+  }
+  return lines.join("");
 }
 
 function buildPointClusters(points, distanceThreshold) {

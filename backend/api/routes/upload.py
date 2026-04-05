@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import zipfile
 from pathlib import Path
+from typing import Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Request
@@ -25,11 +26,12 @@ _REQUIRED_CSV_FILES = (
 
 
 class GenerateRequest(BaseModel):
-    n_factories: int
-    n_warehouses: int
-    n_stores: int
-    n_trucks: int
-    seed: int = 42
+    n_factories: int | None = None
+    n_warehouses: int | None = None
+    n_stores: int | None = None
+    n_trucks: int | None = None
+    seed: int | None = None
+    scale: Literal["small", "medium", "large"] | None = None
 
 
 @router.post("/upload")
@@ -81,6 +83,7 @@ def generate_dataset(payload: GenerateRequest) -> dict[str, object]:
             n_stores=payload.n_stores,
             n_trucks=payload.n_trucks,
             seed=payload.seed,
+            scale=payload.scale,
         )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
