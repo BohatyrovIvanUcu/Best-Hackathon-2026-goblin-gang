@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="uk">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LogiFlow Demo</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">LogiFlow Demo</p>
+          <h1>Проста логістика, яку легко зрозуміти</h1>
+          <p class="hero-text">
+            Це демо показує, куди їхати машинам, які магазини потребують допомоги
+            першими, і що саме має відвантажити склад.
+          </p>
+        </div>
+        <div class="hero-status">
+          <div class="status-card">
+            <span class="status-label">Стан сервера</span>
+            <strong id="health-status">Перевіряю...</strong>
+          </div>
+          <div class="status-card">
+            <span class="status-label">Остання дія</span>
+            <strong id="last-action">Ще нічого не запускали</strong>
+          </div>
+        </div>
+      </header>
+
+      <section class="toolbar">
+        <div class="button-row">
+          <button id="load-demo-button" class="button primary">1. Завантажити демо</button>
+          <button id="generate-button" class="button secondary">2. Згенерувати нову мережу</button>
+          <button id="solve-button" class="button success">3. Побудувати маршрути</button>
+          <button id="refresh-button" class="button light">Оновити дані</button>
+        </div>
+        <div class="button-row">
+          <button id="dispatcher-tab" class="tab-button active">Режим диспетчера</button>
+          <button id="warehouse-tab" class="tab-button">Режим складу</button>
+        </div>
+      </section>
+
+      <section id="message-banner" class="message-banner hidden"></section>
+
+      <main class="main-layout">
+        <section id="dispatcher-view" class="view-section">
+          <div class="grid two-three">
+            <aside class="panel">
+              <h2>Що робити диспетчеру</h2>
+              <ol class="simple-list">
+                <li>Завантаж демо або створи нову мережу.</li>
+                <li>Натисни “Побудувати маршрути”.</li>
+                <li>Подивись, які магазини червоні.</li>
+                <li>Якщо треба, зроби терміновий запит.</li>
+              </ol>
+              <div id="summary-cards" class="summary-cards"></div>
+            </aside>
+
+            <section class="panel map-panel">
+              <div class="panel-header">
+                <h2>Карта мережі</h2>
+                <span class="hint">Клікни на точку, щоб побачити деталі</span>
+              </div>
+              <div id="network-map" class="network-map"></div>
+              <div class="legend">
+                <span><i class="legend-dot factory"></i>Завод</span>
+                <span><i class="legend-dot warehouse"></i>Склад</span>
+                <span><i class="legend-dot normal"></i>Магазин NORMAL</span>
+                <span><i class="legend-dot elevated"></i>Магазин ELEVATED</span>
+                <span><i class="legend-dot critical"></i>Магазин CRITICAL</span>
+              </div>
+            </section>
+          </div>
+
+          <div class="grid two-two">
+            <section class="panel">
+              <div class="panel-header">
+                <h2>Попит магазинів</h2>
+                <span class="hint">Червоні точки треба закрити першими</span>
+              </div>
+              <div id="demand-list" class="stack-list"></div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-header">
+                <h2>Маршрути машин</h2>
+                <span class="hint">Тут видно, хто куди їде</span>
+              </div>
+              <div id="routes-list" class="stack-list"></div>
+            </section>
+          </div>
+        </section>
+
+        <section id="warehouse-view" class="view-section hidden">
+          <div class="grid two-two">
+            <section class="panel">
+              <div class="panel-header">
+                <h2>Машини, які зараз у роботі</h2>
+                <span class="hint">Кнопки йдуть одна за одною, без зайвої складності</span>
+              </div>
+              <div id="warehouse-routes" class="stack-list"></div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-header">
+                <h2>Залишки на складах</h2>
+                <span class="hint">Якщо мало товару, картка стане червоною</span>
+              </div>
+              <div id="stock-list" class="stack-list"></div>
+            </section>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

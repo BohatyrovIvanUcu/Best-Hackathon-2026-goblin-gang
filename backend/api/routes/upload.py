@@ -86,6 +86,21 @@ def generate_dataset(payload: GenerateRequest) -> dict[str, object]:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
 
+@router.post("/demo/load")
+def load_local_demo_data() -> dict[str, object]:
+    settings = get_settings()
+    project_root = Path(__file__).resolve().parents[3]
+    counts = import_demo_data(
+        database_path=settings.database_path,
+        data_dir=project_root / "demo_data",
+    )
+    return {
+        "status": "ok",
+        "source": "demo_data",
+        "imported": counts,
+    }
+
+
 def _resolve_uploaded_data_dir(extracted_root: Path) -> Path:
     root_candidate = extracted_root
     if _contains_required_csvs(root_candidate):
