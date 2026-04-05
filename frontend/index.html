@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="uk">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LogiFlow</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">LogiFlow</p>
+          <h1>Куди везти товар і скільки це коштує</h1>
+          <p class="hero-text">
+            Тут видно, які точки треба рятувати першими, які машини їдуть і чому
+            маршрут коштує саме стільки.
+          </p>
+        </div>
+        <div class="hero-status">
+          <div class="status-card">
+            <span class="status-label">Стан сервера</span>
+            <strong id="health-status">Перевіряю...</strong>
+          </div>
+          <div class="status-card">
+            <span class="status-label">Остання дія</span>
+            <strong id="last-action">Ще нічого не запускали</strong>
+          </div>
+        </div>
+      </header>
+
+      <section class="toolbar">
+        <div class="button-row">
+          <button id="generate-small-button" class="button secondary">1. Мала мережа</button>
+          <button id="generate-medium-button" class="button secondary">1. Середня мережа</button>
+          <button id="generate-large-button" class="button secondary">1. Велика мережа</button>
+          <button id="solve-button" class="button success">2. Побудувати маршрути</button>
+          <button id="refresh-button" class="button light">Оновити дані</button>
+        </div>
+        <div class="button-row">
+          <button id="dispatcher-tab" class="tab-button active">Головний екран</button>
+          <button id="warehouse-tab" class="tab-button">Екран складу</button>
+        </div>
+      </section>
+
+      <section id="message-banner" class="message-banner hidden"></section>
+
+      <main class="main-layout">
+        <section id="dispatcher-view" class="view-section">
+          <div class="grid two-three">
+            <aside class="panel">
+              <h2>Що зробити зараз</h2>
+              <div class="friendly-steps">
+                <article class="friendly-step">
+                  <span class="step-badge">1</span>
+                  <div>
+                    <h3>Створи мережу</h3>
+                    <p>Обери розмір карти: мала, середня або велика.</p>
+                  </div>
+                </article>
+                <article class="friendly-step">
+                  <span class="step-badge">2</span>
+                  <div>
+                    <h3>Побудуй маршрути</h3>
+                    <p>Система сама порахує, хто куди має їхати.</p>
+                  </div>
+                </article>
+                <article class="friendly-step">
+                  <span class="step-badge">3</span>
+                  <div>
+                    <h3>Подивись, де проблема</h3>
+                    <p>Червоні точки означають: туди треба везти товар першими.</p>
+                  </div>
+                </article>
+              </div>
+              <div id="summary-cards" class="summary-cards"></div>
+              <div id="price-explanation" class="price-explanation"></div>
+            </aside>
+
+            <section class="panel map-panel">
+              <div class="panel-header">
+                <h2>Карта мережі</h2>
+                <span class="hint">Натисни на точку, щоб побачити що там відбувається</span>
+              </div>
+              <div id="network-map" class="network-map"></div>
+              <div id="timelapse-bar" class="timelapse-bar hidden">
+                <button id="timelapse-play" class="timelapse-play-btn" aria-label="Грати/Пауза">▶</button>
+                <span class="timelapse-label">Час доби</span>
+                <span id="timelapse-time" class="timelapse-time">08:00</span>
+                <input type="range" id="timelapse-slider" class="timelapse-slider" min="0" max="1439" step="1" value="480">
+                <span id="timelapse-endtime" class="timelapse-endtime">24:00</span>
+                <select id="timelapse-speed" class="timelapse-speed">
+                  <option value="1">1×</option>
+                  <option value="10" selected>10×</option>
+                  <option value="60">60×</option>
+                  <option value="300">300×</option>
+                </select>
+                <span class="timelapse-speed-hint">швидкість</span>
+              </div>
+              <div class="legend">
+                <span><i class="legend-dot factory"></i>Завод</span>
+                <span><i class="legend-dot warehouse"></i>Склад</span>
+                <span><i class="legend-dot normal"></i>Магазин NORMAL</span>
+                <span><i class="legend-dot elevated"></i>Магазин ELEVATED</span>
+                <span><i class="legend-dot critical"></i>Магазин CRITICAL</span>
+              </div>
+            </section>
+          </div>
+
+          <div class="grid two-two">
+            <section class="panel">
+              <div class="panel-header">
+                <h2>Попит магазинів</h2>
+                <span class="hint">Червоні точки треба закрити першими</span>
+              </div>
+              <div id="demand-list" class="stack-list"></div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-header">
+                <h2>Маршрути машин</h2>
+                <span class="hint">Тут видно, хто куди їде</span>
+              </div>
+              <div id="routes-list" class="stack-list"></div>
+            </section>
+          </div>
+        </section>
+
+        <section id="warehouse-view" class="view-section hidden">
+          <section class="panel warehouse-shell">
+            <div class="panel-header warehouse-shell-header">
+              <div>
+                <h2>Робоче місце складу</h2>
+                <p class="warehouse-shell-copy">
+                  Обери свій склад на зміну й працюй лише зі своїми машинами,
+                  прийманням і локальними залишками.
+                </p>
+              </div>
+              <div class="warehouse-picker">
+                <label class="field-label" for="warehouse-select">Мій склад</label>
+                <select id="warehouse-select" class="priority-select"></select>
+              </div>
+            </div>
+            <div id="warehouse-summary" class="summary-cards"></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-header">
+              <h2>Швидкі алерти</h2>
+              <span class="hint">Тут видно, що блокує роботу саме цього складу</span>
+            </div>
+            <div id="warehouse-alerts" class="stack-list"></div>
+          </section>
+
+          <div class="grid two-two">
+            <section class="panel">
+              <div class="panel-header">
+                <h2>Вхідні рейси</h2>
+                <span class="hint">Підтверди прибуття, потім прийми поставку на склад</span>
+              </div>
+              <div id="warehouse-inbound" class="stack-list"></div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-header">
+                <h2>Вихідні рейси</h2>
+                <span class="hint">Комплектування, завантаження й відправка лише зі свого складу</span>
+              </div>
+              <div id="warehouse-outbound" class="stack-list"></div>
+            </section>
+          </div>
+
+          <section class="panel">
+            <div class="panel-header">
+              <h2>Локальні залишки</h2>
+              <span class="hint">Тут лише товари вибраного складу, без глобальної мішанини</span>
+            </div>
+            <div id="warehouse-stock" class="stack-list"></div>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
