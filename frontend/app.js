@@ -7,6 +7,22 @@ const state = {
   stock: [],
   routeDetails: new Map(),
   isBusy: false,
+  mapViewport: {
+    scale: 1,
+    x: 0,
+    y: 0,
+    isDragging: false,
+    pointerId: null,
+    dragStartX: 0,
+    dragStartY: 0,
+    dragOriginX: 0,
+    dragOriginY: 0,
+  },
+  mapLayout: {
+    points: [],
+    edges: [],
+    routes: [],
+  },
 };
 
 const elements = {
@@ -30,6 +46,13 @@ const elements = {
 };
 
 const ROUTE_COLORS = ["#2563eb", "#f97316", "#8b5cf6", "#0f9f6e", "#dc2626", "#0891b2"];
+const MAP_ZOOM = {
+  min: 1,
+  max: 6,
+  step: 1.18,
+  labelsScaleThreshold: 1.35,
+  clusterDistance: 22,
+};
 
 document.addEventListener("DOMContentLoaded", init);
 
@@ -180,6 +203,7 @@ function renderMap() {
   const pointById = new Map(points.map((point) => [point.id, point]));
   const svgLines = [];
   const seenPairs = new Set();
+  const visibleEdges = [];
 
   edges.forEach((edge) => {
     const from = pointById.get(edge.from_id);
@@ -192,11 +216,13 @@ function renderMap() {
       return;
     }
     seenPairs.add(pairKey);
+    visibleEdges.push({ fromId: edge.from_id, toId: edge.to_id });
     svgLines.push(
-      `<line x1="${from.x}" y1="${from.y}" x2="${to.x}" y2="${to.y}" stroke="#b8c8d8" stroke-width="2" opacity="0.65"></line>`
+      `<line class="map-edge" data-from-id="${escapeHtml(edge.from_id)}" data-to-id="${escapeHtml(edge.to_id)}" x1="${from.x}" y1="${from.y}" x2="${to.x}" y2="${to.y}" stroke="#b8c8d8" stroke-width="2" opacity="0.65"></line>`
     );
   });
 
+  const visibleRoutes = [];
   state.routes.forEach((route, routeIndex) => {
     const color = ROUTE_COLORS[routeIndex % ROUTE_COLORS.length];
     const routePoints = route.stops
@@ -205,9 +231,10 @@ function renderMap() {
     if (routePoints.length < 2) {
       return;
     }
+    visibleRoutes.push({ stops: route.stops });
     const polyline = routePoints.map((point) => `${point.x},${point.y}`).join(" ");
     svgLines.push(
-      `<polyline class="route-line" points="${polyline}" stroke="${color}" stroke-width="5"></polyline>`
+      `<polyline class="route-line" data-route-index="${visibleRoutes.length - 1}" points="${polyline}" stroke="${color}" stroke-width="5"></polyline>`
     );
   });
 
@@ -215,8 +242,9 @@ function renderMap() {
     .map((point) => {
       const fill = colorForNode(point);
       const radius = point.type === "warehouse" ? 12 : point.type === "factory" ? 11 : 10;
+      const labelClass = point.type === "store" ? "map-label store-label" : "map-label hub-label";
       return `
-        <g class="map-node" data-node-id="${escapeHtml(point.id)}">
+        <g class="map-node" data-node-id="${escapeHtml(point.id)}" data-base-x="${point.x}" data-base-y="${point.y}">
           <circle
             class="node-point"
             cx="${point.x}"
@@ -225,22 +253,43 @@ function renderMap() {
             fill="${fill}"
             data-node-id="${escapeHtml(point.id)}"
           ></circle>
-          <text class="map-label" x="${point.x + 14}" y="${point.y - 12}">${escapeHtml(shortLabel(point.name))}</text>
+          <text class="${labelClass}" x="${point.x + 14}" y="${point.y - 12}">${escapeHtml(shortLabel(point.name))}</text>
         </g>
       `;
     })
     .join("");
 
   elements.networkMap.innerHTML = `
-    <svg class="map-svg" viewBox="0 0 1000 520" preserveAspectRatio="none">
-      ${svgLines.join("")}
-      ${svgPoints}
-    </svg>
+    <div class="map-toolbar">
+      <div class="map-controls">
+        <button type="button" class="map-control-button" data-map-zoom="out" aria-label="Зменшити карту">-</button>
+        <button type="button" class="map-control-button" data-map-zoom="in" aria-label="Збільшити карту">+</button>
+        <button type="button" class="map-control-button reset" data-map-reset>Скинути</button>
+      </div>
+      <div class="map-status">
+        <span class="map-gesture-hint">Колесо: масштаб, перетягування: панорама</span>
+        <span class="map-zoom-readout">Масштаб <strong data-map-zoom-level>100%</strong></span>
+      </div>
+    </div>
+    <div class="map-viewport" data-map-viewport data-labels="compact">
+      <div class="map-scene" data-map-scene>
+        <svg class="map-svg" viewBox="0 0 1000 520" preserveAspectRatio="none">
+          ${svgLines.join("")}
+          ${svgPoints}
+        </svg>
+      </div>
+    </div>
   `;
 
-  elements.networkMap.querySelectorAll("[data-node-id]").forEach((nodeElement) => {
+  state.mapLayout = {
+    points,
+    edges: visibleEdges,
+    routes: visibleRoutes,
+  };
+
+  elements.networkMap.querySelectorAll(".map-node").forEach((nodeElement) => {
     nodeElement.addEventListener("click", (event) => {
-      const nodeId = event.target.getAttribute("data-node-id");
+      const nodeId = event.currentTarget.getAttribute("data-node-id");
       const node = nodes.find((item) => item.id === nodeId);
       if (!node) {
         return;
@@ -249,6 +298,8 @@ function renderMap() {
       showMessage(detailText, "info");
     });
   });
+
+  setupMapInteractions();
 }
 
 function renderDemand() {
@@ -654,6 +705,362 @@ function roundValue(value) {
 
 function sumBy(items, getter) {
   return items.reduce((sum, item) => sum + getter(item), 0);
+}
+
+function setupMapInteractions() {
+  const viewport = elements.networkMap.querySelector("[data-map-viewport]");
+  const scene = elements.networkMap.querySelector("[data-map-scene]");
+  if (!viewport || !scene) {
+    return;
+  }
+
+  viewport.addEventListener("wheel", handleMapWheel, { passive: false });
+  viewport.addEventListener("pointerdown", handleMapPointerDown);
+  viewport.addEventListener("pointermove", handleMapPointerMove);
+  viewport.addEventListener("pointerup", handleMapPointerEnd);
+  viewport.addEventListener("pointerleave", handleMapPointerEnd);
+  viewport.addEventListener("pointercancel", handleMapPointerEnd);
+  viewport.addEventListener("dblclick", handleMapDoubleClick);
+
+  elements.networkMap.querySelectorAll("[data-map-zoom]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const factor = button.dataset.mapZoom === "in" ? MAP_ZOOM.step : 1 / MAP_ZOOM.step;
+      zoomMapFromViewportCenter(factor);
+    });
+  });
+
+  const resetButton = elements.networkMap.querySelector("[data-map-reset]");
+  resetButton?.addEventListener("click", resetMapViewport);
+
+  applyMapTransform();
+}
+
+function handleMapWheel(event) {
+  event.preventDefault();
+  const factor = event.deltaY < 0 ? MAP_ZOOM.step : 1 / MAP_ZOOM.step;
+  zoomMapAtClientPoint(event.currentTarget, event.clientX, event.clientY, factor);
+}
+
+function handleMapDoubleClick(event) {
+  event.preventDefault();
+  zoomMapAtClientPoint(event.currentTarget, event.clientX, event.clientY, MAP_ZOOM.step);
+}
+
+function handleMapPointerDown(event) {
+  if (event.button !== 0 || state.mapViewport.scale <= MAP_ZOOM.min) {
+    return;
+  }
+  if (event.target.closest(".map-node, .map-control-button")) {
+    return;
+  }
+
+  const viewport = event.currentTarget;
+  state.mapViewport.isDragging = true;
+  state.mapViewport.pointerId = event.pointerId;
+  state.mapViewport.dragStartX = event.clientX;
+  state.mapViewport.dragStartY = event.clientY;
+  state.mapViewport.dragOriginX = state.mapViewport.x;
+  state.mapViewport.dragOriginY = state.mapViewport.y;
+  viewport.classList.add("is-dragging");
+  viewport.setPointerCapture(event.pointerId);
+}
+
+function handleMapPointerMove(event) {
+  if (!state.mapViewport.isDragging || state.mapViewport.pointerId !== event.pointerId) {
+    return;
+  }
+
+  state.mapViewport.x = state.mapViewport.dragOriginX + (event.clientX - state.mapViewport.dragStartX);
+  state.mapViewport.y = state.mapViewport.dragOriginY + (event.clientY - state.mapViewport.dragStartY);
+  applyMapTransform(event.currentTarget);
+}
+
+function handleMapPointerEnd(event) {
+  if (!state.mapViewport.isDragging || state.mapViewport.pointerId !== event.pointerId) {
+    return;
+  }
+
+  const pointerId = state.mapViewport.pointerId;
+  state.mapViewport.isDragging = false;
+  state.mapViewport.pointerId = null;
+  event.currentTarget.classList.remove("is-dragging");
+  if (pointerId !== null && event.currentTarget.hasPointerCapture(pointerId)) {
+    event.currentTarget.releasePointerCapture(pointerId);
+  }
+}
+
+function zoomMapFromViewportCenter(factor) {
+  const viewport = elements.networkMap.querySelector("[data-map-viewport]");
+  if (!viewport) {
+    return;
+  }
+
+  const rect = viewport.getBoundingClientRect();
+  zoomMapAtClientPoint(viewport, rect.left + rect.width / 2, rect.top + rect.height / 2, factor);
+}
+
+function zoomMapAtClientPoint(viewport, clientX, clientY, factor) {
+  const rect = viewport.getBoundingClientRect();
+  const pointerX = clientX - rect.left;
+  const pointerY = clientY - rect.top;
+  const previousScale = state.mapViewport.scale;
+  const nextScale = clamp(previousScale * factor, MAP_ZOOM.min, MAP_ZOOM.max);
+
+  if (nextScale === previousScale) {
+    return;
+  }
+
+  const worldX = (pointerX - state.mapViewport.x) / previousScale;
+  const worldY = (pointerY - state.mapViewport.y) / previousScale;
+
+  state.mapViewport.scale = nextScale;
+  state.mapViewport.x = pointerX - worldX * nextScale;
+  state.mapViewport.y = pointerY - worldY * nextScale;
+  applyMapTransform(viewport);
+}
+
+function resetMapViewport() {
+  state.mapViewport.scale = MAP_ZOOM.min;
+  state.mapViewport.x = 0;
+  state.mapViewport.y = 0;
+  state.mapViewport.isDragging = false;
+  state.mapViewport.pointerId = null;
+  const viewport = elements.networkMap.querySelector("[data-map-viewport]");
+  viewport?.classList.remove("is-dragging");
+  applyMapTransform(viewport);
+}
+
+function applyMapTransform(viewportOverride) {
+  const viewport = viewportOverride || elements.networkMap.querySelector("[data-map-viewport]");
+  const scene = elements.networkMap.querySelector("[data-map-scene]");
+  const zoomLevel = elements.networkMap.querySelector("[data-map-zoom-level]");
+  if (!viewport || !scene) {
+    return;
+  }
+
+  const clamped = clampMapViewport(viewport);
+  state.mapViewport.x = clamped.x;
+  state.mapViewport.y = clamped.y;
+  state.mapViewport.scale = clamped.scale;
+
+  updateMapGeometry();
+  scene.style.transform = `translate(${state.mapViewport.x}px, ${state.mapViewport.y}px) scale(${state.mapViewport.scale})`;
+  viewport.dataset.labels =
+    state.mapViewport.scale >= MAP_ZOOM.labelsScaleThreshold ? "full" : "compact";
+  viewport.dataset.pan = state.mapViewport.scale > MAP_ZOOM.min ? "enabled" : "disabled";
+
+  if (zoomLevel) {
+    zoomLevel.textContent = `${Math.round(state.mapViewport.scale * 100)}%`;
+  }
+}
+
+function clampMapViewport(viewport) {
+  const rect = viewport.getBoundingClientRect();
+  const width = Math.max(rect.width, 1);
+  const height = Math.max(rect.height, 1);
+  const scale = clamp(state.mapViewport.scale, MAP_ZOOM.min, MAP_ZOOM.max);
+
+  if (scale <= MAP_ZOOM.min) {
+    return { scale: MAP_ZOOM.min, x: 0, y: 0 };
+  }
+
+  const minX = width - width * scale;
+  const minY = height - height * scale;
+
+  return {
+    scale,
+    x: clamp(state.mapViewport.x, minX, 0),
+    y: clamp(state.mapViewport.y, minY, 0),
+  };
+}
+
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function updateMapGeometry() {
+  if (!state.mapLayout.points.length) {
+    return;
+  }
+
+  const pointMap = new Map(
+    calculateExpandedPoints(state.mapLayout.points, state.mapViewport.scale).map((point) => [point.id, point])
+  );
+
+  elements.networkMap.querySelectorAll(".map-node").forEach((nodeElement) => {
+    const nodeId = nodeElement.getAttribute("data-node-id");
+    const point = pointMap.get(nodeId);
+    if (!point) {
+      return;
+    }
+
+    const baseX = Number(nodeElement.getAttribute("data-base-x"));
+    const baseY = Number(nodeElement.getAttribute("data-base-y"));
+    nodeElement.setAttribute("transform", `translate(${point.x - baseX} ${point.y - baseY})`);
+
+    const circle = nodeElement.querySelector(".node-point");
+    const label = nodeElement.querySelector(".map-label");
+    const visuals = calculateNodeVisuals(point, state.mapViewport.scale);
+
+    if (circle) {
+      circle.setAttribute("r", visuals.rawRadius);
+      circle.setAttribute("stroke-width", visuals.rawStrokeWidth);
+    }
+
+    if (label) {
+      label.setAttribute("x", baseX + visuals.rawLabelOffsetX);
+      label.setAttribute("y", baseY - visuals.rawLabelOffsetY);
+      label.style.fontSize = `${visuals.rawFontSize}px`;
+    }
+  });
+
+  elements.networkMap.querySelectorAll(".map-edge").forEach((edgeElement) => {
+    const from = pointMap.get(edgeElement.getAttribute("data-from-id"));
+    const to = pointMap.get(edgeElement.getAttribute("data-to-id"));
+    if (!from || !to) {
+      return;
+    }
+
+    edgeElement.setAttribute("x1", from.x);
+    edgeElement.setAttribute("y1", from.y);
+    edgeElement.setAttribute("x2", to.x);
+    edgeElement.setAttribute("y2", to.y);
+  });
+
+  elements.networkMap.querySelectorAll(".route-line").forEach((routeElement) => {
+    const routeIndex = Number(routeElement.getAttribute("data-route-index"));
+    const route = state.mapLayout.routes[routeIndex];
+    if (!route) {
+      return;
+    }
+
+    const polyline = route.stops
+      .map((stopId) => pointMap.get(stopId))
+      .filter(Boolean)
+      .map((point) => `${point.x},${point.y}`)
+      .join(" ");
+    routeElement.setAttribute("points", polyline);
+  });
+}
+
+function calculateExpandedPoints(basePoints, scale) {
+  const pointMap = new Map(basePoints.map((point) => [point.id, { ...point }]));
+  const zoomProgress = Math.max(0, scale - MAP_ZOOM.min);
+  if (!zoomProgress) {
+    return basePoints.map((point) => ({ ...point }));
+  }
+
+  const clusters = buildPointClusters(basePoints, MAP_ZOOM.clusterDistance);
+  clusters.forEach((cluster) => {
+    if (cluster.length < 2) {
+      return;
+    }
+
+    const centroid = {
+      x: sumBy(cluster, (point) => point.x) / cluster.length,
+      y: sumBy(cluster, (point) => point.y) / cluster.length,
+    };
+    const sorted = [...cluster].sort(clusterPointSort);
+    const angleStep = (Math.PI * 2) / sorted.length;
+    const spreadRadius = 8 + zoomProgress * 10 + Math.max(0, cluster.length - 3) * 3;
+
+    sorted.forEach((point, index) => {
+      const angle = -Math.PI / 2 + index * angleStep;
+      const radius = spreadRadius + Math.floor(index / 6) * (6 + zoomProgress * 4);
+      pointMap.set(point.id, {
+        ...point,
+        x: centroid.x + Math.cos(angle) * radius,
+        y: centroid.y + Math.sin(angle) * radius,
+      });
+    });
+  });
+
+  return basePoints.map((point) => pointMap.get(point.id) ?? { ...point });
+}
+
+function calculateNodeVisuals(point, scale) {
+  const zoomRatio = getZoomRatio(scale);
+  const screenRadius = point.type === "store"
+    ? 15.2 + zoomRatio * 1.7
+    : point.type === "warehouse"
+      ? 17.2 + zoomRatio * 1.8
+      : 16.4 + zoomRatio * 1.7;
+  const screenStrokeWidth = 2.4 + zoomRatio * 0.25;
+  const screenFontSize = point.type === "store"
+    ? 16 + zoomRatio * 1.5
+    : 17 + zoomRatio * 1.4;
+  const screenLabelOffsetX = 18 + zoomRatio * 2;
+  const screenLabelOffsetY = 15 + zoomRatio * 1.4;
+
+  return {
+    rawRadius: screenRadius / scale,
+    rawStrokeWidth: screenStrokeWidth / scale,
+    rawFontSize: screenFontSize / scale,
+    rawLabelOffsetX: screenLabelOffsetX / scale,
+    rawLabelOffsetY: screenLabelOffsetY / scale,
+  };
+}
+
+function buildPointClusters(points, distanceThreshold) {
+  const clusters = [];
+  const visited = new Set();
+
+  points.forEach((point) => {
+    if (visited.has(point.id)) {
+      return;
+    }
+
+    const cluster = [];
+    const queue = [point];
+    visited.add(point.id);
+
+    while (queue.length) {
+      const current = queue.shift();
+      cluster.push(current);
+
+      points.forEach((candidate) => {
+        if (visited.has(candidate.id)) {
+          return;
+        }
+        if (distanceBetweenPoints(current, candidate) > distanceThreshold) {
+          return;
+        }
+
+        visited.add(candidate.id);
+        queue.push(candidate);
+      });
+    }
+
+    clusters.push(cluster);
+  });
+
+  return clusters;
+}
+
+function distanceBetweenPoints(first, second) {
+  const dx = first.x - second.x;
+  const dy = first.y - second.y;
+  return Math.hypot(dx, dy);
+}
+
+function getZoomRatio(scale) {
+  if (MAP_ZOOM.max === MAP_ZOOM.min) {
+    return 0;
+  }
+  return clamp((scale - MAP_ZOOM.min) / (MAP_ZOOM.max - MAP_ZOOM.min), 0, 1);
+}
+
+function clusterPointSort(first, second) {
+  const typeOrder = {
+    warehouse: 0,
+    factory: 1,
+    store: 2,
+  };
+  const typeDelta = (typeOrder[first.type] ?? 99) - (typeOrder[second.type] ?? 99);
+  if (typeDelta !== 0) {
+    return typeDelta;
+  }
+  return String(first.name).localeCompare(String(second.name), "uk");
 }
 
 function escapeHtml(value) {
