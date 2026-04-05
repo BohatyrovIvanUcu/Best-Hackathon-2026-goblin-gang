@@ -11,7 +11,7 @@ router = APIRouter(tags=["routes"])
 @router.get("/routes")
 def get_routes(
     leg: int | None = Query(default=None),
-) -> dict[str, list[dict[str, object]]]:
+) -> dict[str, object]:
     settings = get_settings()
     return fetch_routes_data(settings.database_path, leg=leg)
 

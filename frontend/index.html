@@ -3,18 +3,18 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>LogiFlow Demo</title>
+    <title>LogiFlow</title>
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
     <div class="app-shell">
       <header class="hero">
         <div>
-          <p class="eyebrow">LogiFlow Demo</p>
-          <h1>Проста логістика, яку легко зрозуміти</h1>
+          <p class="eyebrow">LogiFlow</p>
+          <h1>Куди везти товар і скільки це коштує</h1>
           <p class="hero-text">
-            Це демо показує, куди їхати машинам, які магазини потребують допомоги
-            першими, і що саме має відвантажити склад.
+            Тут видно, які точки треба рятувати першими, які машини їдуть і чому
+            маршрут коштує саме стільки.
           </p>
         </div>
         <div class="hero-status">
@@ -31,16 +31,15 @@
 
       <section class="toolbar">
         <div class="button-row">
-          <button id="load-demo-button" class="button primary">1. Завантажити демо</button>
-          <button id="generate-small-button" class="button secondary">2. Мала мережа</button>
-          <button id="generate-medium-button" class="button secondary">2. Середня мережа</button>
-          <button id="generate-large-button" class="button secondary">2. Велика мережа</button>
-          <button id="solve-button" class="button success">3. Побудувати маршрути</button>
+          <button id="generate-small-button" class="button secondary">1. Мала мережа</button>
+          <button id="generate-medium-button" class="button secondary">1. Середня мережа</button>
+          <button id="generate-large-button" class="button secondary">1. Велика мережа</button>
+          <button id="solve-button" class="button success">2. Побудувати маршрути</button>
           <button id="refresh-button" class="button light">Оновити дані</button>
         </div>
         <div class="button-row">
-          <button id="dispatcher-tab" class="tab-button active">Режим диспетчера</button>
-          <button id="warehouse-tab" class="tab-button">Режим складу</button>
+          <button id="dispatcher-tab" class="tab-button active">Головний екран</button>
+          <button id="warehouse-tab" class="tab-button">Екран складу</button>
         </div>
       </section>
 
@@ -50,20 +49,38 @@
         <section id="dispatcher-view" class="view-section">
           <div class="grid two-three">
             <aside class="panel">
-              <h2>Що робити диспетчеру</h2>
-              <ol class="simple-list">
-                <li>Завантаж демо або створи нову мережу.</li>
-                <li>Натисни “Побудувати маршрути”.</li>
-                <li>Подивись, які магазини червоні.</li>
-                <li>Якщо треба, зроби терміновий запит.</li>
-              </ol>
+              <h2>Що зробити зараз</h2>
+              <div class="friendly-steps">
+                <article class="friendly-step">
+                  <span class="step-badge">1</span>
+                  <div>
+                    <h3>Створи мережу</h3>
+                    <p>Обери розмір карти: мала, середня або велика.</p>
+                  </div>
+                </article>
+                <article class="friendly-step">
+                  <span class="step-badge">2</span>
+                  <div>
+                    <h3>Побудуй маршрути</h3>
+                    <p>Система сама порахує, хто куди має їхати.</p>
+                  </div>
+                </article>
+                <article class="friendly-step">
+                  <span class="step-badge">3</span>
+                  <div>
+                    <h3>Подивись, де проблема</h3>
+                    <p>Червоні точки означають: туди треба везти товар першими.</p>
+                  </div>
+                </article>
+              </div>
               <div id="summary-cards" class="summary-cards"></div>
+              <div id="price-explanation" class="price-explanation"></div>
             </aside>
 
             <section class="panel map-panel">
               <div class="panel-header">
                 <h2>Карта мережі</h2>
-                <span class="hint">Клікни на точку, щоб побачити деталі</span>
+                <span class="hint">Натисни на точку, щоб побачити що там відбувається</span>
               </div>
               <div id="network-map" class="network-map"></div>
               <div class="legend">

@@ -4,6 +4,7 @@ const state = {
   network: { nodes: [], edges: [] },
   demand: [],
   routes: [],
+  costSummary: null,
   stock: [],
   warehouses: [],
   selectedWarehouseId: readStoredWarehouseId(),
@@ -35,13 +36,13 @@ const elements = {
   warehouseView: document.getElementById("warehouse-view"),
   dispatcherTab: document.getElementById("dispatcher-tab"),
   warehouseTab: document.getElementById("warehouse-tab"),
-  loadDemoButton: document.getElementById("load-demo-button"),
   generateSmallButton: document.getElementById("generate-small-button"),
   generateMediumButton: document.getElementById("generate-medium-button"),
   generateLargeButton: document.getElementById("generate-large-button"),
   solveButton: document.getElementById("solve-button"),
   refreshButton: document.getElementById("refresh-button"),
   summaryCards: document.getElementById("summary-cards"),
+  priceExplanation: document.getElementById("price-explanation"),
   networkMap: document.getElementById("network-map"),
   demandList: document.getElementById("demand-list"),
   routesList: document.getElementById("routes-list"),
@@ -65,7 +66,7 @@ const MAP_ZOOM = {
 const MAP_SIZE = {
   width: 1000,
   height: 520,
-  padding: 88,
+  padding: 112,
 };
 
 document.addEventListener("DOMContentLoaded", init);
@@ -89,12 +90,6 @@ function bindEvents() {
     persistSelectedWarehouseId(state.selectedWarehouseId);
     safeAction("Перемикаю робоче місце складу", async () => {
       await refreshWarehouseDashboard();
-    });
-  });
-  elements.loadDemoButton.addEventListener("click", () => {
-    safeAction("Завантажую локальний демо-набір", async () => {
-      await apiPost("/api/demo/load");
-      await refreshAllData();
     });
   });
   elements.generateSmallButton.addEventListener("click", () => generateNetwork("small", "малу"));
@@ -151,6 +146,7 @@ async function refreshAllData(loadDetails = false) {
   state.network = normalizeNetwork(network);
   state.demand = Array.isArray(demandResponse.demand) ? demandResponse.demand : [];
   state.routes = Array.isArray(routesResponse.routes) ? routesResponse.routes : [];
+  state.costSummary = routesResponse.cost_summary || null;
   state.stock = Array.isArray(stockResponse.stock) ? stockResponse.stock : [];
 
   if (state.activeView === "warehouse") {
@@ -220,13 +216,69 @@ function renderSummary() {
   const routeCost = sumBy(state.routes, (route) => Number(route.total_cost || 0));
 
   elements.summaryCards.innerHTML = [
-    summaryCard("Магазини", totals.stores),
-    summaryCard("Критичні точки", totals.critical),
-    summaryCard("Маршрути", totals.routes),
-    summaryCard("Кілометри", roundValue(routeKm)),
-    summaryCard("Вартість", `${roundValue(routeCost)} грн`),
-    summaryCard("Рядки складу", totals.stockRows),
+    friendlyMetricCard("Магазини", totals.stores, "Точки, куди може поїхати машина."),
+    friendlyMetricCard("Термінові точки", totals.critical, "Їх краще закривати першими."),
+    friendlyMetricCard("Маршрути", totals.routes, "Скільки рейсів зараз у плані."),
+    friendlyMetricCard("Кілометри", roundValue(routeKm), "Стільки всього проїдуть машини."),
+    friendlyMetricCard("Вартість", `${roundValue(routeCost)} грн`, "Орієнтовна ціна всіх маршрутів разом."),
+    friendlyMetricCard("Позиції складу", totals.stockRows, "Скільки рядків запасів зараз відстежується."),
   ].join("");
+  renderPriceExplanation();
+}
+
+function renderPriceExplanation() {
+  const summary = state.costSummary;
+  if (!elements.priceExplanation) {
+    return;
+  }
+  if (!summary) {
+    elements.priceExplanation.innerHTML = `
+      <div class="price-card empty">
+        <h3>Як рахується ціна</h3>
+        <p>Створи мережу і побудуй маршрути. Тоді тут з’явиться проста формула вартості.</p>
+      </div>
+    `;
+    return;
+  }
+
+  const perKm = summary.per_km || {};
+  const totals = summary.totals || {};
+  const inputs = summary.formula_inputs || {};
+  elements.priceExplanation.innerHTML = `
+    <section class="price-card">
+      <div class="price-card-header">
+        <div>
+          <p class="price-kicker">Як ми рахуємо гроші</p>
+          <h3>Проста формула ціни</h3>
+        </div>
+        <strong class="price-total">${escapeHtml(`${roundValue(totals.estimated_total_cost || 0)} грн`)}</strong>
+      </div>
+      <p class="price-formula">Ціна за 1 км = паливо + робота водія + амортизація + обслуговування</p>
+      <div class="price-parts">
+        ${pricePart("Паливо", `${roundValue(perKm.fuel_cost_per_km || 0)} грн/км`, `${roundValue(inputs.baseline_fuel_per_100km || 0)} л/100км × ${roundValue(inputs.fuel_price || 0)} грн`)}
+        ${pricePart("Водій", `${roundValue(perKm.driver_cost_per_km || 0)} грн/км`, `${roundValue(inputs.driver_hourly_default || 0)} грн/год ÷ ${roundValue(inputs.avg_speed_default || 0)} км/год`)}
+        ${pricePart("Амортизація", `${roundValue(perKm.amortization_per_km || 0)} грн/км`, "Постійна частина на кожен кілометр")}
+        ${pricePart("Обслуговування", `${roundValue(perKm.maintenance_per_km || 0)} грн/км`, "Шини, ремонт і дрібні витрати")}
+      </div>
+      <div class="price-equation">
+        <span>${escapeHtml(`${roundValue(perKm.total_cost_per_km || 0)} грн/км`)}</span>
+        <span class="price-multiply">×</span>
+        <span>${escapeHtml(`${roundValue(totals.total_km || 0)} км`)}</span>
+        <span class="price-multiply">=</span>
+        <strong>${escapeHtml(`${roundValue(totals.estimated_total_cost || 0)} грн`)}</strong>
+      </div>
+    </section>
+  `;
+}
+
+function pricePart(label, value, note) {
+  return `
+    <article class="price-part">
+      <span class="price-part-label">${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+      <p>${escapeHtml(note)}</p>
+    </article>
+  `;
 }
 
 function renderMap() {
@@ -236,7 +288,7 @@ function renderMap() {
       <div class="map-empty">
         <div>
           <strong>Поки немає даних.</strong>
-          <p>Натисни “Завантажити демо” або “Згенерувати нову мережу”.</p>
+          <p>Натисни одну з кнопок генерації, щоб побачити карту й маршрути.</p>
         </div>
       </div>
     `;
@@ -329,7 +381,7 @@ function renderMap() {
         <span class="map-metric-chip">Ребра ${visibleEdges.length}</span>
         <span class="map-metric-chip">Critical ${criticalStores}</span>
         <span class="map-metric-chip">Elevated ${elevatedStores}</span>
-        <span class="map-gesture-hint">Колесо: масштаб, перетягування: панорама</span>
+        <span class="map-gesture-hint">Колесо змінює масштаб, мишка рухає карту</span>
         <span class="map-zoom-readout">Масштаб <strong data-map-zoom-level>100%</strong></span>
       </div>
       <div class="sim-controls">
@@ -396,7 +448,7 @@ function renderMap() {
 
 function renderDemand() {
   if (!state.demand.length) {
-    elements.demandList.innerHTML = emptyCard("Поки нема попиту. Спочатку завантаж дані.");
+    elements.demandList.innerHTML = emptyCard("Поки немає попиту. Спочатку створи мережу, а потім побудуй маршрути.");
     return;
   }
 
@@ -843,7 +895,6 @@ async function safeAction(label, action) {
 function setBusy(isBusy) {
   state.isBusy = isBusy;
   [
-    elements.loadDemoButton,
     elements.generateSmallButton,
     elements.generateMediumButton,
     elements.generateLargeButton,
@@ -1114,6 +1165,16 @@ function summaryCard(label, value) {
       <span class="label">${escapeHtml(label)}</span>
       <strong>${escapeHtml(String(value))}</strong>
     </div>
+  `;
+}
+
+function friendlyMetricCard(label, value, note) {
+  return `
+    <article class="summary-card friendly">
+      <span class="label">${escapeHtml(label)}</span>
+      <strong>${escapeHtml(String(value))}</strong>
+      <p>${escapeHtml(note)}</p>
+    </article>
   `;
 }
 
@@ -1462,10 +1523,10 @@ function updateNodeShapeGeometry(shape, point, visuals) {
 
 function relaxProjectedPoints(points, width, height, padding) {
   const relaxed = points.map((point) => ({ ...point, anchorX: point.x, anchorY: point.y }));
-  const minDistance = 38;
-  const spring = 0.04;
+  const minDistance = 48;
+  const spring = 0.035;
 
-  for (let iteration = 0; iteration < 44; iteration += 1) {
+  for (let iteration = 0; iteration < 58; iteration += 1) {
     for (let index = 0; index < relaxed.length; index += 1) {
       for (let candidateIndex = index + 1; candidateIndex < relaxed.length; candidateIndex += 1) {
         const first = relaxed[index];
@@ -1473,11 +1534,12 @@ function relaxProjectedPoints(points, width, height, padding) {
         const dx = second.x - first.x;
         const dy = second.y - first.y;
         const distance = Math.hypot(dx, dy) || 0.001;
-        if (distance >= minDistance) {
+        const desiredDistance = targetNodeSpacing(first, second, minDistance);
+        if (distance >= desiredDistance) {
           continue;
         }
 
-        const push = (minDistance - distance) / 2;
+        const push = (desiredDistance - distance) / 2;
         const offsetX = (dx / distance) * push;
         const offsetY = (dy / distance) * push;
         first.x -= offsetX;
@@ -1496,6 +1558,18 @@ function relaxProjectedPoints(points, width, height, padding) {
   }
 
   return relaxed.map(({ anchorX, anchorY, ...point }) => point);
+}
+
+function targetNodeSpacing(first, second, baseDistance) {
+  const touchesWarehouse = first.type === "warehouse" || second.type === "warehouse";
+  const storePair = first.type === "store" && second.type === "store";
+  if (touchesWarehouse) {
+    return baseDistance + 16;
+  }
+  if (storePair) {
+    return baseDistance + 8;
+  }
+  return baseDistance;
 }
 
 function buildMapGrid() {

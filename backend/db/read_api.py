@@ -463,6 +463,10 @@ def fetch_routes_data(
             row["id"]: row["name"]
             for row in connection.execute("SELECT id, name FROM nodes")
         }
+        settings = {
+            row["key"]: parse_setting_value(row["key"], row["value"])
+            for row in connection.execute("SELECT key, value FROM settings ORDER BY key")
+        }
         routes = []
         for row in connection.execute(query, params):
             stops = json.loads(row["stops"])
@@ -519,7 +523,10 @@ def fetch_routes_data(
     finally:
         connection.close()
 
-    return {"routes": routes}
+    return {
+        "routes": routes,
+        "cost_summary": _build_cost_summary(routes, settings),
+    }
 
 
 def fetch_route_by_truck_id(
@@ -744,6 +751,51 @@ def _fetch_route_cargo_state_grouped(
     for row in rows:
         grouped.setdefault(int(row["route_id"]), []).append(row)
     return grouped
+
+
+def _build_cost_summary(
+    routes: list[dict[str, object]],
+    settings: dict[str, object],
+) -> dict[str, object]:
+    total_km = round(sum(float(route["total_km"]) for route in routes), 2)
+    estimated_total_cost = round(sum(float(route["total_cost"]) for route in routes), 2)
+
+    fuel_price = float(settings.get("fuel_price", 0.0) or 0.0)
+    driver_hourly = float(settings.get("driver_hourly_default", 0.0) or 0.0)
+    avg_speed = float(settings.get("avg_speed_default", 1.0) or 1.0)
+    amortization = float(settings.get("amortization_default", 0.0) or 0.0)
+    maintenance = float(settings.get("maintenance_default", 0.0) or 0.0)
+
+    # The main-screen explainer uses a simple “typical route truck” baseline.
+    baseline_fuel_per_100km = 22.0
+    fuel_cost_per_km = round((baseline_fuel_per_100km * fuel_price) / 100.0, 2)
+    driver_cost_per_km = round(driver_hourly / avg_speed, 2) if avg_speed > 0 else 0.0
+    total_cost_per_km = round(
+        fuel_cost_per_km + driver_cost_per_km + amortization + maintenance,
+        2,
+    )
+
+    return {
+        "formula_inputs": {
+            "fuel_price": fuel_price,
+            "driver_hourly_default": driver_hourly,
+            "avg_speed_default": avg_speed,
+            "amortization_default": amortization,
+            "maintenance_default": maintenance,
+            "baseline_fuel_per_100km": baseline_fuel_per_100km,
+        },
+        "per_km": {
+            "fuel_cost_per_km": fuel_cost_per_km,
+            "driver_cost_per_km": driver_cost_per_km,
+            "amortization_per_km": amortization,
+            "maintenance_per_km": maintenance,
+            "total_cost_per_km": total_cost_per_km,
+        },
+        "totals": {
+            "total_km": total_km,
+            "estimated_total_cost": estimated_total_cost,
+        },
+    }
 
 
 def _find_warehouse_stop_index(stops: list[str], warehouse_id: str) -> int | None:

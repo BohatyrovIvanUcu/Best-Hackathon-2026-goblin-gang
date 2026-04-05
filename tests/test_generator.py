@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 
 from backend.api.routes.upload import GenerateRequest
 from backend.config import Settings
+from backend.db.read_api import fetch_routes_data
 from backend.db.generator import SCALE_PRESETS, generate_random_dataset
 from backend.db.helpers import connect
 from backend.db.solver_runtime import load_solver_inputs_from_db, run_solver_and_persist
@@ -212,6 +213,22 @@ class GeneratorTests(unittest.TestCase):
                 break
 
         self.assertTrue(found_multi_hop_segment)
+
+    def test_routes_response_includes_cost_summary(self) -> None:
+        database_path = self.create_db_path()
+        generate_random_dataset(database_path, scale="small", seed=20260405)
+        run_solver_and_persist(database_path)
+
+        response = fetch_routes_data(database_path)
+
+        self.assertIn("cost_summary", response)
+        cost_summary = response["cost_summary"]
+        self.assertIn("formula_inputs", cost_summary)
+        self.assertIn("per_km", cost_summary)
+        self.assertIn("totals", cost_summary)
+        self.assertGreaterEqual(cost_summary["per_km"]["total_cost_per_km"], 0)
+        self.assertGreaterEqual(cost_summary["totals"]["total_km"], 0)
+        self.assertGreaterEqual(cost_summary["totals"]["estimated_total_cost"], 0)
 
     def test_generate_request_accepts_manual_counts_without_scale(self) -> None:
         payload = GenerateRequest(

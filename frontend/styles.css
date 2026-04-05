@@ -247,6 +247,44 @@ input {
   line-height: 1.7;
 }
 
+.friendly-steps {
+  display: grid;
+  gap: 12px;
+}
+
+.friendly-step {
+  display: grid;
+  grid-template-columns: 40px 1fr;
+  gap: 12px;
+  align-items: start;
+  padding: 14px;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #f7fbff, #edf4fb);
+  border: 1px solid rgba(215, 226, 238, 0.9);
+}
+
+.friendly-step h3 {
+  margin: 0 0 4px;
+  font-size: 18px;
+}
+
+.friendly-step p {
+  margin: 0;
+  color: var(--text-soft);
+  line-height: 1.5;
+}
+
+.step-badge {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--primary);
+  color: #fff;
+  font-weight: 800;
+}
+
 .summary-cards {
   margin-top: 18px;
   display: grid;
@@ -269,6 +307,110 @@ input {
 
 .summary-card strong {
   font-size: 26px;
+}
+
+.summary-card.friendly {
+  background: linear-gradient(180deg, #f8fbff, #edf4fb);
+  border: 1px solid rgba(215, 226, 238, 0.9);
+}
+
+.summary-card.friendly p {
+  margin: 8px 0 0;
+  color: var(--text-soft);
+  line-height: 1.45;
+  font-size: 13px;
+}
+
+.price-explanation {
+  margin-top: 18px;
+}
+
+.price-card {
+  padding: 18px;
+  border-radius: 18px;
+  background: linear-gradient(180deg, #f7fff9, #edf7ff);
+  border: 1px solid rgba(188, 214, 238, 0.9);
+}
+
+.price-card.empty p {
+  margin: 8px 0 0;
+  color: var(--text-soft);
+}
+
+.price-card-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: start;
+}
+
+.price-card-header h3 {
+  margin: 0;
+  font-size: 22px;
+}
+
+.price-kicker {
+  margin: 0 0 6px;
+  color: var(--success);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.price-total {
+  font-size: 24px;
+}
+
+.price-formula {
+  margin: 12px 0 0;
+  color: var(--text);
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.price-parts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.price-part {
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(215, 226, 238, 0.8);
+}
+
+.price-part-label {
+  display: block;
+  color: var(--text-soft);
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.price-part p {
+  margin: 6px 0 0;
+  color: var(--text-soft);
+  line-height: 1.4;
+  font-size: 12px;
+}
+
+.price-equation {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-top: 16px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(25, 50, 77, 0.06);
+  font-weight: 800;
+}
+
+.price-multiply {
+  color: var(--text-soft);
 }
 
 .network-map {
@@ -806,6 +948,17 @@ input {
   .card-header,
   .row-between {
     flex-direction: column;
+  }
+
+  .price-card-header,
+  .price-equation {
+    flex-direction: column;
+    align-items: start;
+  }
+
+  .price-parts,
+  .summary-cards {
+    grid-template-columns: 1fr;
   }
 
   .hint {
